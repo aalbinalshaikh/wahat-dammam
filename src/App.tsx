@@ -21,7 +21,7 @@ import {
 getFirestore, collection, doc, addDoc, updateDoc, deleteDoc,
 onSnapshot, getDocs
 } from 'firebase/firestore';
-​// --- تهيئة الاتصال بقاعدة البيانات السحابية لمشروع واحة الدمام ---
+​
 const firebaseConfig = typeof __firebase_config !== 'undefined'
 ? JSON.parse(__firebase_config)
 : {
