@@ -7,13 +7,13 @@ import {
   FileText, UserCheck, Shield, Wrench, ChevronLeft, ChevronRight,
   BarChart3, Activity, Layers, MapPin,
   ArrowUpRight, RefreshCw, Send, UploadCloud, AlertCircle,
-  Check, RotateCcw, Home, ListChecks, Users, History, LogIn, LogOut, Lock, Mail
+  RotateCcw, Home, ListChecks, Users, History, LogIn, LogOut, Lock, Mail
 } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip,
   PieChart, Pie, Cell, CartesianGrid, Legend
 } from 'recharts';
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
   GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut
@@ -47,9 +47,18 @@ const firebaseConfig = rawFirebaseConfig
       measurementId: "G-VTJNGB93FL"
     };
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+let app: any = null;
+let auth: any = null;
+let db: any = null;
+
+try {
+  app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (err) {
+  console.error('Firebase initialization warning:', err);
+}
+
 const appId = rawAppId || 'dammam-oasis-villas';
 
 // --- تعريف الفلل الأربع المستقلة في مشروع واحة الدمام ---
@@ -487,19 +496,32 @@ const buildInitialSeedSnags = (): Omit<SnagItem, 'id'>[] => {
   ];
 };
 
+const INITIAL_SEEDS_WITH_IDS: SnagItem[] = buildInitialSeedSnags().map((s, idx) => ({
+  ...s,
+  id: `seed-snag-${idx}`
+}));
+
+const INITIAL_MEMBERS_WITH_IDS: AuthorizedMember[] = VILLAS_LIST.map((v, idx) => ({
+  id: `seed-member-${idx}`,
+  name: v.ownerName,
+  email: v.defaultEmail.toLowerCase(),
+  role: 'owner',
+  villaId: v.id
+}));
+
 export default function App() {
   // --- حالة المصادقة والمستخدم الحالي ---
   const [user, setUser] = useState<any>(null);
   const [currentRole, setCurrentRole] = useState<RoleType>('guest');
-  const [loading, setLoading] = useState<boolean>(true);
-  const [authorizedMembers, setAuthorizedMembers] = useState<AuthorizedMember[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [authorizedMembers, setAuthorizedMembers] = useState<AuthorizedMember[]>(INITIAL_MEMBERS_WITH_IDS);
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberRole] = useState<'owner' | 'contractor' | 'supervisor'>('owner');
   const [newMemberVilla, setNewMemberVilla] = useState<string>('v102-b9');
 
   // --- بيانات قاعدة البيانات الحية لجميع الفلل ---
-  const [allSnags, setAllSnags] = useState<SnagItem[]>([]);
+  const [allSnags, setAllSnags] = useState<SnagItem[]>(INITIAL_SEEDS_WITH_IDS);
   const [allAuditLogs, setAllAuditLogs] = useState<AuditLog[]>([]);
 
   // --- التنقل الرئيسي ---
@@ -553,33 +575,30 @@ export default function App() {
 
   // --- 1. المصادقة مع Firestore (مع دعم الجوال والتابلت) ---
   useEffect(() => {
+    if (!auth) return;
     const initAuth = async () => {
       try {
         await getRedirectResult(auth).catch(() => {});
         if (rawInitialToken) {
           await signInWithCustomToken(auth, rawInitialToken);
         } else if (!auth.currentUser) {
-          await signInAnonymously(auth);
+          await signInAnonymously(auth).catch(() => {});
         }
       } catch (err) {
         console.error('Auth error:', err);
-        setLoading(false);
       }
     };
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
+    const unsubscribe = onAuthStateChanged(auth, (u: any) => {
       setUser(u);
-      if (!u) setLoading(false);
+      setLoading(false);
     });
-    const fallbackTimer = setTimeout(() => setLoading(false), 3500);
-    return () => {
-      unsubscribe();
-      clearTimeout(fallbackTimer);
-    };
+    return () => unsubscribe();
   }, []);
 
   // --- 2. الاشتراك اللحظي في جداول قاعدة البيانات ---
   useEffect(() => {
+    if (!db) return;
     const snagsCol = collection(db, 'artifacts', appId, 'public', 'data', 'oasis_villas_snags');
     const logsCol = collection(db, 'artifacts', appId, 'public', 'data', 'oasis_villas_logs');
     const membersCol = collection(db, 'artifacts', appId, 'public', 'data', 'oasis_villas_members');
@@ -602,8 +621,7 @@ export default function App() {
               details: 'تم إنشاء السجلات المستقلة للفلل الأربع ضمن مشروع واحة الدمام'
             });
           } catch {
-            setAllSnags(seeds.map((s, idx) => ({ ...s, id: `local-seed-${idx}` })));
-            setLoading(false);
+            // استخدام البيانات المحلية في حال عدم توفر صلاحية الكتابة المجهولة
           }
         }
 
@@ -619,31 +637,11 @@ export default function App() {
               });
             }
           } catch {
-            setAuthorizedMembers(
-              VILLAS_LIST.map((v, idx) => ({
-                id: `local-member-${idx}`,
-                name: v.ownerName,
-                email: v.defaultEmail.toLowerCase(),
-                role: 'owner',
-                villaId: v.id
-              }))
-            );
+            // استخدام القائمة المحلية الافتراضية
           }
         }
-      } catch (e: any) {
-        if (e?.code === 'permission-denied') {
-          setAllSnags(buildInitialSeedSnags().map((s, idx) => ({ ...s, id: `local-seed-${idx}` })));
-          setAuthorizedMembers(
-            VILLAS_LIST.map((v, idx) => ({
-              id: `local-member-${idx}`,
-              name: v.ownerName,
-              email: v.defaultEmail.toLowerCase(),
-              role: 'owner',
-              villaId: v.id
-            }))
-          );
-          setLoading(false);
-        }
+      } catch {
+        // الإبقاء على البيانات المحلية الجاهزة
       }
     };
     seedIfEmpty();
@@ -651,75 +649,67 @@ export default function App() {
     const unsubSnags = onSnapshot(
       snagsCol,
       (snapshot) => {
-        if (snapshot.empty) {
-          setAllSnags((prev) =>
-            prev.length > 0 ? prev : buildInitialSeedSnags().map((s, idx) => ({ ...s, id: `local-seed-${idx}` }))
-          );
-          setLoading(false);
-          return;
-        }
-        const list: SnagItem[] = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<SnagItem, 'id'>)
-        }));
-        list.sort((a, b) => a.snagNumber.localeCompare(b.snagNumber));
-        setAllSnags(list);
-        setLoading(false);
+        if (!snapshot.empty) {
+          const list: SnagItem[] = snapshot.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<SnagItem, 'id'>)
+          }));
+          list.sort((a, b) => a.snagNumber.localeCompare(b.snagNumber));
+          setAllSnags(list);
 
-        if (!hasNormalizedDuplicatesRef.current && list.length > 0) {
-          hasNormalizedDuplicatesRef.current = true;
-          const byVilla: Record<string, SnagItem[]> = {};
-          list.forEach((item) => {
-            if (!byVilla[item.villaId]) byVilla[item.villaId] = [];
-            byVilla[item.villaId].push(item);
-          });
-
-          Object.entries(byVilla).forEach(([vId, vItems]) => {
-            const vCfg = VILLAS_LIST.find((v) => v.id === vId);
-            if (!vCfg) return;
-            const seenNumbers = new Set<string>();
-            let maxSeq = 0;
-
-            vItems.forEach((it) => {
-              const match = it.snagNumber.match(/-(\d+)$/);
-              if (match) {
-                const num = parseInt(match[1], 10);
-                if (num > maxSeq) maxSeq = num;
-              }
+          if (!hasNormalizedDuplicatesRef.current && list.length > 0) {
+            hasNormalizedDuplicatesRef.current = true;
+            const byVilla: Record<string, SnagItem[]> = {};
+            list.forEach((item) => {
+              if (!byVilla[item.villaId]) byVilla[item.villaId] = [];
+              byVilla[item.villaId].push(item);
             });
 
-            vItems.forEach((it) => {
-              if (seenNumbers.has(it.snagNumber)) {
-                maxSeq += 1;
-                const uniqueNum = `${vCfg.prefix}-${String(maxSeq).padStart(3, '0')}`;
-                seenNumbers.add(uniqueNum);
-                if (it.id) {
-                  updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'oasis_villas_snags', it.id), {
-                    snagNumber: uniqueNum
-                  }).catch(() => {});
+            Object.entries(byVilla).forEach(([vId, vItems]) => {
+              const vCfg = VILLAS_LIST.find((v) => v.id === vId);
+              if (!vCfg) return;
+              const seenNumbers = new Set<string>();
+              let maxSeq = 0;
+
+              vItems.forEach((it) => {
+                const match = it.snagNumber.match(/-(\d+)$/);
+                if (match) {
+                  const num = parseInt(match[1], 10);
+                  if (num > maxSeq) maxSeq = num;
                 }
-              } else {
-                seenNumbers.add(it.snagNumber);
-              }
-            });
-          });
-        }
+              });
 
-        const delayedItems = list.filter((item) => {
-          if (item.status === 'معتمد' || !item.targetDate) return false;
-          const diff = Math.floor((new Date(todayStr).getTime() - new Date(item.targetDate).getTime()) / (1000 * 60 * 60 * 24));
-          return diff > 0;
-        });
-        if (delayedItems.length > 0 && !hasShownInitialDelayPopup) {
-          setIsDelayPopupOpen(true);
-          setHasShownInitialDelayPopup(true);
+              vItems.forEach((it) => {
+                if (seenNumbers.has(it.snagNumber)) {
+                  maxSeq += 1;
+                  const uniqueNum = `${vCfg.prefix}-${String(maxSeq).padStart(3, '0')}`;
+                  seenNumbers.add(uniqueNum);
+                  if (it.id) {
+                    updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'oasis_villas_snags', it.id), {
+                      snagNumber: uniqueNum
+                    }).catch(() => {});
+                  }
+                } else {
+                  seenNumbers.add(it.snagNumber);
+                }
+              });
+            });
+          }
+
+          const delayedItems = list.filter((item) => {
+            if (item.status === 'معتمد' || !item.targetDate) return false;
+            const diff = Math.floor((new Date(todayStr).getTime() - new Date(item.targetDate).getTime()) / (1000 * 60 * 60 * 24));
+            return diff > 0;
+          });
+          if (delayedItems.length > 0 && !hasShownInitialDelayPopup) {
+            setIsDelayPopupOpen(true);
+            setHasShownInitialDelayPopup(true);
+          }
         }
+        setLoading(false);
       },
       (err) => {
         console.error('Snags listener error:', err);
-        setAllSnags((prev) =>
-          prev.length > 0 ? prev : buildInitialSeedSnags().map((s, idx) => ({ ...s, id: `local-seed-${idx}` }))
-        );
         setLoading(false);
       }
     );
@@ -740,25 +730,13 @@ export default function App() {
     const unsubMembers = onSnapshot(
       membersCol,
       (snapshot) => {
-        if (snapshot.empty) {
-          setAuthorizedMembers((prev) =>
-            prev.length > 0
-              ? prev
-              : VILLAS_LIST.map((v, idx) => ({
-                  id: `local-member-${idx}`,
-                  name: v.ownerName,
-                  email: v.defaultEmail.toLowerCase(),
-                  role: 'owner',
-                  villaId: v.id
-                }))
-          );
-          return;
+        if (!snapshot.empty) {
+          const list: AuthorizedMember[] = snapshot.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<AuthorizedMember, 'id'>)
+          }));
+          setAuthorizedMembers(list);
         }
-        const list: AuthorizedMember[] = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<AuthorizedMember, 'id'>)
-        }));
-        setAuthorizedMembers(list);
       },
       (err) => console.error('Members listener error:', err)
     );
@@ -787,6 +765,10 @@ export default function App() {
 
   // --- تسجيل الدخول عبر Google (Gmail) مع دعم الجوال ---
   const handleGoogleSignIn = async () => {
+    if (!auth) {
+      showToast('error', 'خدمة المصادقة غير متوفرة في بيئة المعاينة الحالية');
+      return;
+    }
     try {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
@@ -816,7 +798,7 @@ export default function App() {
         }
       }
       if (err?.code === 'auth/unauthorized-domain') {
-        showToast('error', 'يجب إضافة رابط wahat-dammam.vercel.app في Authorized domains داخل Firebase Authentication.');
+        showToast('error', 'يجب إضافة رابط الموقع في Authorized domains داخل Firebase Authentication.');
       } else if (err?.code === 'auth/operation-not-allowed') {
         showToast('error', 'يجب تفعيل مزود Google (Enable) في Sign-in method داخل Firebase Authentication.');
       } else {
@@ -828,8 +810,10 @@ export default function App() {
   // --- تسجيل الخروج والعودة لوضع الضيف ---
   const handleLogout = async () => {
     try {
-      await signOut(auth);
-      await signInAnonymously(auth).catch(() => {});
+      if (auth) {
+        await signOut(auth);
+        await signInAnonymously(auth).catch(() => {});
+      }
       setCurrentRole('guest');
       showToast('success', 'تم تسجيل الخروج بنجاح (أنت الآن في وضع الضيف للمشاهدة فقط)');
     } catch (e) {
@@ -899,7 +883,7 @@ export default function App() {
   };
 
   const logOperation = async (action: string, snagNumber: string, details: string) => {
-    if (!currentVilla) return;
+    if (!currentVilla || !db) return;
     const roleLabel =
       currentRole === 'owner'
         ? `مالك الفيلا (${matchedMember?.name || user?.email || 'المالك'})`
@@ -1752,7 +1736,6 @@ export default function App() {
             villa={currentVilla}
             snag={selectedSnag}
             delayDays={getDelayDays(selectedSnag)}
-            currentRole={currentRole}
             permissions={permissions}
             onBack={() => setSelectedSnagId(null)}
             onEdit={() => {
@@ -2707,7 +2690,7 @@ export default function App() {
                 </div>
                 <div>
                   <span className="text-[11px] font-bold text-rose-100 block">
-                    تنبيه تلقائي مباشر من قاعدة البيانات (Firebase)
+                    تنبيه تلقائي مباشر من قاعدة البيانات
                   </span>
                   <h3 className="text-lg sm:text-xl font-black">
                     يوجد {allDelayedSnags.length} ملاحظات متأخرة عن الموعد المستهدف!
@@ -2985,7 +2968,6 @@ function SnagDetailView({
   villa: VillaConfig;
   snag: SnagItem;
   delayDays: number;
-  currentRole: RoleType;
   permissions: any;
   onBack: () => void;
   onEdit: () => void;
@@ -3650,7 +3632,7 @@ function SnagFormModal({
                 onClick={handleConfirmImport}
                 className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-extrabold shadow flex items-center gap-1.5"
               >
-                <Check className="w-4 h-4" />
+                <CheckCircle2 className="w-4 h-4" />
                 <span>
                   {isImporting
                     ? 'جاري الاستيراد...'
