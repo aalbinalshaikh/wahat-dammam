@@ -22,6 +22,7 @@ import {
   getFirestore, collection, doc, addDoc, updateDoc, deleteDoc,
   onSnapshot, getDocs
 } from 'firebase/firestore';
+// Firebase Config
 
 declare global {
   interface Window {
