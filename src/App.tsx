@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Building2, CheckCircle2, Clock, AlertTriangle, PlayCircle,
   Search, Plus, Eye, Edit3, Trash2, CheckSquare,
@@ -7,8 +7,64 @@ import {
   BarChart3, Activity, Layers, MapPin,
   ArrowUpRight, Send, AlertCircle,
   RotateCcw, Home, ListChecks, Users, History, LogIn, LogOut, Lock, Mail,
-  Menu, Printer, Filter, Check
+  Menu, Printer, Filter, Check, Cloud, HardDrive, RefreshCw
 } from 'lucide-react';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged
+} from 'firebase/auth';
+import {
+  getFirestore,
+  collection,
+  doc,
+  onSnapshot,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  addDoc,
+  writeBatch,
+  getDocs
+} from 'firebase/firestore';
+
+// ============================================================================
+// 0. إعدادات الاتصال السحابي Firebase (wahat-dammam-9201a) مع حماية المعاينة
+// ============================================================================
+
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyA5hAcMExqIEcYHeZU7aO5A34A1VKgTC50",
+  authDomain: "wahat-dammam-9201a.firebaseapp.com",
+  projectId: "wahat-dammam-9201a",
+  storageBucket: "wahat-dammam-9201a.firebasestorage.app",
+  messagingSenderId: "156686828072",
+  appId: "1:156686828072:web:de3c7aa1680e934b436b1d",
+  measurementId: "G-VTJNGB93FL"
+};
+
+let firebaseApp: any = null;
+let firebaseAuth: any = null;
+let firebaseDb: any = null;
+let isFirebaseInitialized = false;
+
+try {
+  firebaseApp = getApps().length > 0 ? getApp() : initializeApp(FIREBASE_CONFIG);
+  firebaseAuth = getAuth(firebaseApp);
+  firebaseDb = getFirestore(firebaseApp);
+  isFirebaseInitialized = Boolean(firebaseAuth && firebaseDb);
+} catch (err) {
+  console.warn('Firebase fallback to localStorage mode:', err);
+  isFirebaseInitialized = false;
+}
+
+const STORAGE_KEYS = {
+  SNAGS: 'wahat_dammam_snags_v2',
+  MEMBERS: 'wahat_dammam_members_v2',
+  LOGS: 'wahat_dammam_logs_v2',
+  AUTH_EMAIL: 'wahat_dammam_auth_email_v2'
+};
 
 // ============================================================================
 // 1. البيانات الأساسية للفلل الأربع ومراحل العمل
@@ -87,9 +143,9 @@ const CATEGORIES = ['أعمال البلاط والرخام', 'السباكة و
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; barColor: string }> = {
   'رصد الملاحظة': { label: '1. رصد الملاحظة', color: 'text-slate-700', bg: 'bg-slate-100', border: 'border-slate-300', barColor: '#64748b' },
-  'استلام المقاول': { label: '2. استلام المقاول', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-300', barColor: '#f59e0b' },
-  'جاري الإصلاح': { label: '3. جاري الإصلاح', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-300', barColor: '#3b82f6' },
-  'تم الإغلاق والاعتماد': { label: '4. تم الإغلاق والاعتماد', color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-300', barColor: '#10b981' }
+  'إشعار المقاول': { label: '2. إشعار المقاول', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-300', barColor: '#f59e0b' },
+  'المعالجة والتنفيذ': { label: '3. المعالجة والتنفيذ', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-300', barColor: '#3b82f6' },
+  'الفحص والاعتماد': { label: '4. الفحص والاعتماد', color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-300', barColor: '#10b981' }
 };
 
 const PRIORITY_CONFIG: Record<string, { label: string; badge: string }> = {
@@ -127,7 +183,7 @@ interface SnagItem {
   category: string;
   floor: string;
   location: string;
-  status: 'رصد الملاحظة' | 'استلام المقاول' | 'جاري الإصلاح' | 'تم الإغلاق والاعتماد';
+  status: 'رصد الملاحظة' | 'إشعار المقاول' | 'المعالجة والتنفيذ' | 'الفحص والاعتماد';
   priority: 'عاجل' | 'عالي' | 'متوسط' | 'منخفض';
   createdAt: string;
   targetDate: string;
@@ -186,7 +242,7 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'أعمال البلاط والرخام',
     floor: 'الدور الأرضي',
     location: 'مجلس الرجال',
-    status: 'تم الإغلاق والاعتماد',
+    status: 'الفحص والاعتماد',
     priority: 'عالي',
     createdAt: '2026-11-01',
     targetDate: '2026-11-07',
@@ -198,9 +254,9 @@ const INITIAL_SNAGS: SnagItem[] = [
     afterImage: makeDocPhoto('صورة بعد: استبدال البلاط والترويبة', 'فيلا 102 - بلوك 9 | معتمد نهائياً', '#065f46'),
     steps: [
       { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: '2026-11-01 09:30 ص', actor: 'أحمد بو عبدالله (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول', completed: true, timestamp: '2026-11-02 08:15 ص', actor: 'مقاول التشطيبات' },
-      { stepNumber: 3, title: 'جاري الإصلاح', completed: true, timestamp: '2026-11-04 11:00 ص', actor: 'مقاول التشطيبات', note: 'تم فك البلاط وتنظيف القاعدة وإعادة التركيب' },
-      { stepNumber: 4, title: 'تم الإغلاق والاعتماد', completed: true, timestamp: '2026-11-06 04:30 م', actor: 'أحمد بو عبدالله (المالك)', note: 'تم الفحص ومطابقة لون الترويبة بنجاح' }
+      { stepNumber: 2, title: 'إشعار المقاول', completed: true, timestamp: '2026-11-02 08:15 ص', actor: 'مقاول التشطيبات' },
+      { stepNumber: 3, title: 'المعالجة والتنفيذ', completed: true, timestamp: '2026-11-04 11:00 ص', actor: 'مقاول التشطيبات', note: 'تم فك البلاط وتنظيف القاعدة وإعادة التركيب' },
+      { stepNumber: 4, title: 'الفحص والاعتماد', completed: true, timestamp: '2026-11-06 04:30 م', actor: 'أحمد بو عبدالله (المالك)', note: 'تم الفحص ومطابقة لون الترويبة بنجاح' }
     ],
     comments: [
       { id: 'c-101', authorName: 'أحمد عبدالكريم بو عبدالله', authorRole: 'owner', text: 'يرجى التأكد من مطابقة درجة لون الترويبة مع باقي المجلس.', timestamp: '2026-11-01 09:40 ص' }
@@ -215,7 +271,7 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'السباكة والتغذية',
     floor: 'الدور الأرضي',
     location: 'دورة مياه الضيوف',
-    status: 'جاري الإصلاح',
+    status: 'المعالجة والتنفيذ',
     priority: 'عاجل',
     createdAt: '2026-11-10',
     targetDate: '2026-11-16',
@@ -224,9 +280,9 @@ const INITIAL_SNAGS: SnagItem[] = [
     beforeImage: makeDocPhoto('صورة قبل: تسريب محبس الزاوية', 'فيلا 102 - بلوك 9 | متأخرة عن الموعد', '#9a3412'),
     steps: [
       { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: '2026-11-10 10:15 ص', actor: 'أحمد بو عبدالله (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول', completed: true, timestamp: '2026-11-12 09:00 ص', actor: 'مقاول السباكة' },
-      { stepNumber: 3, title: 'جاري الإصلاح', completed: true, timestamp: '2026-11-15 01:20 م', actor: 'مقاول السباكة', note: 'تم توريد محبس جديد وجاري التركيب والاختبار' },
-      { stepNumber: 4, title: 'تم الإغلاق والاعتماد', completed: false }
+      { stepNumber: 2, title: 'إشعار المقاول', completed: true, timestamp: '2026-11-12 09:00 ص', actor: 'مقاول السباكة' },
+      { stepNumber: 3, title: 'المعالجة والتنفيذ', completed: true, timestamp: '2026-11-15 01:20 م', actor: 'مقاول السباكة', note: 'تم توريد محبس جديد وجاري التركيب والاختبار' },
+      { stepNumber: 4, title: 'الفحص والاعتماد', completed: false }
     ],
     comments: []
   },
@@ -239,7 +295,7 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'الدهانات والجبس',
     floor: 'الدور الأول',
     location: 'غرفة النوم الرئيسية (الماستر)',
-    status: 'استلام المقاول',
+    status: 'إشعار المقاول',
     priority: 'متوسط',
     createdAt: '2026-11-18',
     targetDate: '2026-11-28',
@@ -248,9 +304,9 @@ const INITIAL_SNAGS: SnagItem[] = [
     beforeImage: makeDocPhoto('صورة قبل: تفاوت دهان الجدار الغربي', 'فيلا 102 - بلوك 9 | ضمن الجدول الزمني', '#1e40af'),
     steps: [
       { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: '2026-11-18 05:00 م', actor: 'المشرف الهندسي' },
-      { stepNumber: 2, title: 'استلام المقاول', completed: true, timestamp: '2026-11-20 08:30 ص', actor: 'مقاول الدهانات' },
-      { stepNumber: 3, title: 'جاري الإصلاح', completed: false },
-      { stepNumber: 4, title: 'تم الإغلاق والاعتماد', completed: false }
+      { stepNumber: 2, title: 'إشعار المقاول', completed: true, timestamp: '2026-11-20 08:30 ص', actor: 'مقاول الدهانات' },
+      { stepNumber: 3, title: 'المعالجة والتنفيذ', completed: false },
+      { stepNumber: 4, title: 'الفحص والاعتماد', completed: false }
     ],
     comments: []
   },
@@ -265,7 +321,7 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'الألمنيوم والأبواب',
     floor: 'الدور الأرضي',
     location: 'الصالة العائلية',
-    status: 'جاري الإصلاح',
+    status: 'المعالجة والتنفيذ',
     priority: 'عالي',
     createdAt: '2026-11-08',
     targetDate: '2026-11-15',
@@ -274,9 +330,9 @@ const INITIAL_SNAGS: SnagItem[] = [
     beforeImage: makeDocPhoto('صورة قبل: فجوة ربل نافذة الصالة', 'فيلا 71 - بلوك 9 | حسين بو علي', '#991b1b'),
     steps: [
       { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: '2026-11-08 11:00 ص', actor: 'حسين بو علي (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول', completed: true, timestamp: '2026-11-10 09:30 ص', actor: 'مقاول الألمنيوم' },
-      { stepNumber: 3, title: 'جاري الإصلاح', completed: true, timestamp: '2026-11-14 02:00 م', actor: 'مقاول الألمنيوم' },
-      { stepNumber: 4, title: 'تم الإغلاق والاعتماد', completed: false }
+      { stepNumber: 2, title: 'إشعار المقاول', completed: true, timestamp: '2026-11-10 09:30 ص', actor: 'مقاول الألمنيوم' },
+      { stepNumber: 3, title: 'المعالجة والتنفيذ', completed: true, timestamp: '2026-11-14 02:00 م', actor: 'مقاول الألمنيوم' },
+      { stepNumber: 4, title: 'الفحص والاعتماد', completed: false }
     ],
     comments: []
   },
@@ -298,9 +354,9 @@ const INITIAL_SNAGS: SnagItem[] = [
     beforeImage: makeDocPhoto('صورة قبل: عطل محول الإنارة المخفية', 'فيلا 71 - بلوك 9 | حسين بو علي', '#7f1d1d'),
     steps: [
       { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: '2026-11-11 04:15 م', actor: 'حسين بو علي (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول', completed: false },
-      { stepNumber: 3, title: 'جاري الإصلاح', completed: false },
-      { stepNumber: 4, title: 'تم الإغلاق والاعتماد', completed: false }
+      { stepNumber: 2, title: 'إشعار المقاول', completed: false },
+      { stepNumber: 3, title: 'المعالجة والتنفيذ', completed: false },
+      { stepNumber: 4, title: 'الفحص والاعتماد', completed: false }
     ],
     comments: []
   },
@@ -313,7 +369,7 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'السباكة والتغذية',
     floor: 'السور والحوش الخارجي',
     location: 'الحوش الجانبي',
-    status: 'تم الإغلاق والاعتماد',
+    status: 'الفحص والاعتماد',
     priority: 'متوسط',
     createdAt: '2026-11-05',
     targetDate: '2026-11-10',
@@ -325,9 +381,9 @@ const INITIAL_SNAGS: SnagItem[] = [
     afterImage: makeDocPhoto('صورة بعد: تنظيف واختبار التصريف', 'فيلا 71 - بلوك 9 | معتمد', '#065f46'),
     steps: [
       { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: '2026-11-05 04:00 م', actor: 'حسين بو علي (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول', completed: true, timestamp: '2026-11-06 08:00 ص', actor: 'مقاول النظافة' },
-      { stepNumber: 3, title: 'جاري الإصلاح', completed: true, timestamp: '2026-11-08 12:30 م', actor: 'مقاول النظافة' },
-      { stepNumber: 4, title: 'تم الإغلاق والاعتماد', completed: true, timestamp: '2026-11-09 05:00 م', actor: 'حسين بو علي (المالك)' }
+      { stepNumber: 2, title: 'إشعار المقاول', completed: true, timestamp: '2026-11-06 08:00 ص', actor: 'مقاول النظافة' },
+      { stepNumber: 3, title: 'المعالجة والتنفيذ', completed: true, timestamp: '2026-11-08 12:30 م', actor: 'مقاول النظافة' },
+      { stepNumber: 4, title: 'الفحص والاعتماد', completed: true, timestamp: '2026-11-09 05:00 م', actor: 'حسين بو علي (المالك)' }
     ],
     comments: []
   },
@@ -342,7 +398,7 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'الدهانات والجبس',
     floor: 'الدور الأرضي',
     location: 'المطبخ الرئيسي',
-    status: 'استلام المقاول',
+    status: 'إشعار المقاول',
     priority: 'عالي',
     createdAt: '2026-11-09',
     targetDate: '2026-11-17',
@@ -351,9 +407,9 @@ const INITIAL_SNAGS: SnagItem[] = [
     beforeImage: makeDocPhoto('صورة قبل: تشقق شعري بسقف المطبخ', 'فيلا 60 - بلوك 12 | محمد بو عبدالكريم', '#9a3412'),
     steps: [
       { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: '2026-11-09 01:20 م', actor: 'محمد بو عبدالكريم (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول', completed: true, timestamp: '2026-11-11 10:00 ص', actor: 'مقاول الجبس والدهان' },
-      { stepNumber: 3, title: 'جاري الإصلاح', completed: false },
-      { stepNumber: 4, title: 'تم الإغلاق والاعتماد', completed: false }
+      { stepNumber: 2, title: 'إشعار المقاول', completed: true, timestamp: '2026-11-11 10:00 ص', actor: 'مقاول الجبس والدهان' },
+      { stepNumber: 3, title: 'المعالجة والتنفيذ', completed: false },
+      { stepNumber: 4, title: 'الفحص والاعتماد', completed: false }
     ],
     comments: []
   },
@@ -366,7 +422,7 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'الكهرباء والإنارة',
     floor: 'الدور الأول',
     location: 'صالة الدور الأول',
-    status: 'تم الإغلاق والاعتماد',
+    status: 'الفحص والاعتماد',
     priority: 'متوسط',
     createdAt: '2026-11-12',
     targetDate: '2026-11-19',
@@ -378,9 +434,9 @@ const INITIAL_SNAGS: SnagItem[] = [
     afterImage: makeDocPhoto('صورة بعد: تركيب جدول القواطع', 'فيلا 60 - بلوك 12 | معتمد', '#047857'),
     steps: [
       { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: '2026-11-12 10:00 ص', actor: 'محمد بو عبدالكريم (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول', completed: true, timestamp: '2026-11-13 09:00 ص', actor: 'مقاول الكهرباء' },
-      { stepNumber: 3, title: 'جاري الإصلاح', completed: true, timestamp: '2026-11-16 02:15 م', actor: 'مقاول الكهرباء' },
-      { stepNumber: 4, title: 'تم الإغلاق والاعتماد', completed: true, timestamp: '2026-11-18 04:00 م', actor: 'محمد بو عبدالكريم (المالك)' }
+      { stepNumber: 2, title: 'إشعار المقاول', completed: true, timestamp: '2026-11-13 09:00 ص', actor: 'مقاول الكهرباء' },
+      { stepNumber: 3, title: 'المعالجة والتنفيذ', completed: true, timestamp: '2026-11-16 02:15 م', actor: 'مقاول الكهرباء' },
+      { stepNumber: 4, title: 'الفحص والاعتماد', completed: true, timestamp: '2026-11-18 04:00 م', actor: 'محمد بو عبدالكريم (المالك)' }
     ],
     comments: []
   },
@@ -395,7 +451,7 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'أعمال البلاط والرخام',
     floor: 'السور والحوش الخارجي',
     location: 'الخزان الأرضي',
-    status: 'جاري الإصلاح',
+    status: 'المعالجة والتنفيذ',
     priority: 'عالي',
     createdAt: '2026-11-10',
     targetDate: '2026-11-17',
@@ -404,9 +460,9 @@ const INITIAL_SNAGS: SnagItem[] = [
     beforeImage: makeDocPhoto('صورة قبل: بروز 4 ملم بغطاء الخزان', 'فيلا 71 - بلوك 12 | إبراهيم بو دانه', '#581c87'),
     steps: [
       { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: '2026-11-10 09:45 ص', actor: 'إبراهيم بو دانه (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول', completed: true, timestamp: '2026-11-12 10:15 ص', actor: 'مقاول التشطيبات' },
-      { stepNumber: 3, title: 'جاري الإصلاح', completed: true, timestamp: '2026-11-16 11:30 ص', actor: 'مقاول التشطيبات' },
-      { stepNumber: 4, title: 'تم الإغلاق والاعتماد', completed: false }
+      { stepNumber: 2, title: 'إشعار المقاول', completed: true, timestamp: '2026-11-12 10:15 ص', actor: 'مقاول التشطيبات' },
+      { stepNumber: 3, title: 'المعالجة والتنفيذ', completed: true, timestamp: '2026-11-16 11:30 ص', actor: 'مقاول التشطيبات' },
+      { stepNumber: 4, title: 'الفحص والاعتماد', completed: false }
     ],
     comments: []
   },
@@ -419,7 +475,7 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'العزل والسطح',
     floor: 'السطح',
     location: 'منطقة التكييف',
-    status: 'تم الإغلاق والاعتماد',
+    status: 'الفحص والاعتماد',
     priority: 'عاجل',
     createdAt: '2026-11-14',
     targetDate: '2026-11-21',
@@ -431,9 +487,9 @@ const INITIAL_SNAGS: SnagItem[] = [
     afterImage: makeDocPhoto('صورة بعد: إغلاق العزل والاختبار', 'فيلا 71 - بلوك 12 | معتمد', '#065f46'),
     steps: [
       { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: '2026-11-14 11:30 ص', actor: 'إبراهيم بو دانه (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول', completed: true, timestamp: '2026-11-15 08:30 ص', actor: 'مقاول العزل' },
-      { stepNumber: 3, title: 'جاري الإصلاح', completed: true, timestamp: '2026-11-18 01:00 م', actor: 'مقاول العزل' },
-      { stepNumber: 4, title: 'تم الإغلاق والاعتماد', completed: true, timestamp: '2026-11-20 03:45 م', actor: 'إبراهيم بو دانه (المالك)' }
+      { stepNumber: 2, title: 'إشعار المقاول', completed: true, timestamp: '2026-11-15 08:30 ص', actor: 'مقاول العزل' },
+      { stepNumber: 3, title: 'المعالجة والتنفيذ', completed: true, timestamp: '2026-11-18 01:00 م', actor: 'مقاول العزل' },
+      { stepNumber: 4, title: 'الفحص والاعتماد', completed: true, timestamp: '2026-11-20 03:45 م', actor: 'إبراهيم بو دانه (المالك)' }
     ],
     comments: []
   }
@@ -489,10 +545,29 @@ const INITIAL_LOGS: AuditLog[] = [
 export default function App() {
   const todayStr = '2026-11-22';
 
+  // حالة الاتصال والمزامنة (سحابي Firebase أو حفظ محلي تلقائي)
+  const [syncMode, setSyncMode] = useState<'cloud' | 'local'>(isFirebaseInitialized ? 'cloud' : 'local');
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+
   // حالة المصادقة والصلاحيات
-  const [loggedInEmail, setLoggedInEmail] = useState<string | null>(null);
+  const [loggedInEmail, setLoggedInEmail] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.AUTH_EMAIL);
+    } catch {
+      return null;
+    }
+  });
   const [currentRole, setCurrentRole] = useState<RoleType>('guest');
-  const [authorizedMembers, setAuthorizedMembers] = useState<AuthorizedMember[]>(INITIAL_AUTHORIZED_MEMBERS);
+  const [authorizedMembers, setAuthorizedMembers] = useState<AuthorizedMember[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.MEMBERS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return INITIAL_AUTHORIZED_MEMBERS;
+  });
 
   // نافذة تسجيل الدخول بـ Gmail
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
@@ -504,9 +579,158 @@ export default function App() {
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberVilla, setNewMemberVilla] = useState('all');
 
-  // بيانات الملاحظات وسجل التدقيق
-  const [allSnags, setAllSnags] = useState<SnagItem[]>(INITIAL_SNAGS);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(INITIAL_LOGS);
+  // بيانات الملاحظات وسجل التدقيق (مرتبطة بـ localStorage + Firestore)
+  const [allSnags, setAllSnags] = useState<SnagItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.SNAGS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return INITIAL_SNAGS;
+  });
+
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.LOGS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return INITIAL_LOGS;
+  });
+
+  // حفظ فوري تلقائي في localStorage كنسخة احتياطية دائمة مع كل تغيير
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.SNAGS, JSON.stringify(allSnags));
+    } catch {}
+  }, [allSnags]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(authorizedMembers));
+    } catch {}
+  }, [authorizedMembers]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(auditLogs));
+    } catch {}
+  }, [auditLogs]);
+
+  useEffect(() => {
+    try {
+      if (loggedInEmail) {
+        localStorage.setItem(STORAGE_KEYS.AUTH_EMAIL, loggedInEmail);
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.AUTH_EMAIL);
+      }
+    } catch {}
+  }, [loggedInEmail]);
+
+  // المزامنة السحابية الحية مع Firebase Firestore & Auth
+  useEffect(() => {
+    if (!isFirebaseInitialized || !firebaseDb || !firebaseAuth) {
+      setSyncMode('local');
+      return;
+    }
+
+    const unsubAuth = onAuthStateChanged(firebaseAuth, (fbUser: any) => {
+      if (fbUser && fbUser.email) {
+        const clean = fbUser.email.toLowerCase().trim();
+        setLoggedInEmail(clean);
+      }
+    });
+
+    const snagsCol = collection(firebaseDb, 'snags');
+    const membersCol = collection(firebaseDb, 'authorized_emails');
+    const logsCol = collection(firebaseDb, 'audit_logs');
+
+    // تهيئة البيانات الأولية في Firestore إذا كانت المجموعة فارغة
+    getDocs(snagsCol)
+      .then(async (snap) => {
+        if (snap.empty) {
+          const batch = writeBatch(firebaseDb);
+          INITIAL_SNAGS.forEach((item) => {
+            batch.set(doc(firebaseDb, 'snags', item.id), item);
+          });
+          await batch.commit();
+        }
+        setSyncMode('cloud');
+      })
+      .catch(() => {
+        setSyncMode('local');
+      });
+
+    getDocs(membersCol)
+      .then(async (snap) => {
+        if (snap.empty) {
+          const batch = writeBatch(firebaseDb);
+          INITIAL_AUTHORIZED_MEMBERS.forEach((m) => {
+            batch.set(doc(firebaseDb, 'authorized_emails', m.id), m);
+          });
+          await batch.commit();
+        }
+      })
+      .catch(() => {});
+
+    const unsubSnags = onSnapshot(
+      snagsCol,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const cloudSnags: SnagItem[] = snapshot.docs.map((d) => ({
+            ...(d.data() as SnagItem),
+            id: d.id
+          }));
+          cloudSnags.sort((a, b) => a.snagNumber.localeCompare(b.snagNumber));
+          setAllSnags(cloudSnags);
+          setSyncMode('cloud');
+        }
+      },
+      () => {
+        setSyncMode('local');
+      }
+    );
+
+    const unsubMembers = onSnapshot(
+      membersCol,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const cloudMembers: AuthorizedMember[] = snapshot.docs.map((d) => ({
+            ...(d.data() as AuthorizedMember),
+            id: d.id
+          }));
+          setAuthorizedMembers(cloudMembers);
+        }
+      },
+      () => {}
+    );
+
+    const unsubLogs = onSnapshot(
+      logsCol,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const cloudLogs: AuditLog[] = snapshot.docs.map((d) => ({
+            ...(d.data() as AuditLog),
+            id: d.id
+          }));
+          cloudLogs.sort((a, b) => b.id.localeCompare(a.id));
+          setAuditLogs(cloudLogs);
+        }
+      },
+      () => {}
+    );
+
+    return () => {
+      unsubAuth();
+      unsubSnags();
+      unsubMembers();
+      unsubLogs();
+    };
+  }, []);
 
   // التنقل والواجهة
   const [selectedVillaId, setSelectedVillaId] = useState<string>('home');
@@ -539,7 +763,7 @@ export default function App() {
 
   // حساب أيام التأخير
   const getDelayDays = (snag: SnagItem): number => {
-    if (snag.status === 'تم الإغلاق والاعتماد' || !snag.targetDate) return 0;
+    if (snag.status === 'الفحص والاعتماد' || !snag.targetDate) return 0;
     const target = new Date(snag.targetDate);
     const today = new Date(todayStr);
     const diffDays = Math.floor((today.getTime() - target.getTime()) / (1000 * 60 * 60 * 24));
@@ -550,18 +774,75 @@ export default function App() {
   const matchedMember = useMemo(() => {
     if (!loggedInEmail) return null;
     const clean = loggedInEmail.toLowerCase().trim();
+    if (clean === 'aalbinalshaikh@gmail.com') {
+      return {
+        id: 'mem-1',
+        name: 'أحمد عبدالكريم بو عبدالله',
+        email: 'aalbinalshaikh@gmail.com',
+        role: 'owner' as const,
+        villaId: 'all'
+      };
+    }
     return authorizedMembers.find((m) => m.email.toLowerCase().trim() === clean) || null;
   }, [loggedInEmail, authorizedMembers]);
 
-  const isGuest = !matchedMember || currentRole === 'guest';
+  useEffect(() => {
+    if (matchedMember) {
+      setCurrentRole((prev) => (prev === 'guest' ? matchedMember.role : prev));
+    } else {
+      setCurrentRole('guest');
+    }
+  }, [matchedMember]);
 
-  const permissions = {
-    canCreate: !isGuest && (currentRole === 'owner' || currentRole === 'supervisor'),
-    canEdit: !isGuest && (currentRole === 'owner' || currentRole === 'supervisor'),
-    canDelete: !isGuest && currentRole === 'owner',
-    canApprove: !isGuest && (currentRole === 'owner' || currentRole === 'supervisor'),
-    canContractorWork: !isGuest,
-    canComment: !isGuest
+  const isGuest = !matchedMember || currentRole === 'guest';
+  // تسجيل الدخول عبر Google الحقيقي (Firebase Auth) أو التحقق المباشر
+  const handleGooglePopupSignIn = async () => {
+    setLoginError('');
+    if (!isFirebaseInitialized || !firebaseAuth) {
+      handleAttemptLogin(loginEmailInput);
+      return;
+    }
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const result = await signInWithPopup(firebaseAuth, provider);
+      const email = result.user?.email?.toLowerCase().trim() || '';
+      const found =
+        email === 'aalbinalshaikh@gmail.com'
+          ? {
+              id: 'mem-1',
+              name: result.user?.displayName || 'أحمد عبدالكريم بو عبدالله',
+              email,
+              role: 'owner' as const,
+              villaId: 'all'
+            }
+          : authorizedMembers.find((m) => m.email.toLowerCase().trim() === email);
+
+      if (!found) {
+        await signOut(firebaseAuth).catch(() => {});
+        setLoggedInEmail(null);
+        setCurrentRole('guest');
+        setLoginError('أنت غير مصرح بالدخول، راجع مسؤول التطبيق');
+        showToast('error', 'أنت غير مصرح بالدخول، راجع مسؤول التطبيق');
+        return;
+      }
+
+      setLoggedInEmail(found.email);
+      setCurrentRole(found.role);
+      setIsLoginModalOpen(false);
+      showToast('success', `أهلاً بك ${found.name} — تم تفعيل صلاحيات التحكم الكاملة وحفظ التغييرات`);
+    } catch (err: any) {
+      // في حال حظر النوافذ المنبثقة في المعاينة، نستخدم التحقق المباشر من البريد المدخل
+      if (
+        err?.code === 'auth/popup-blocked' ||
+        err?.code === 'auth/unauthorized-domain' ||
+        err?.code === 'auth/operation-not-supported-in-this-environment'
+      ) {
+        handleAttemptLogin(loginEmailInput);
+      } else if (err?.code !== 'auth/popup-closed-by-user') {
+        setLoginError('أنت غير مصرح بالدخول، راجع مسؤول التطبيق');
+      }
+    }
   };
 
   // تسجيل الدخول عبر البريد الإلكتروني
@@ -571,12 +852,22 @@ export default function App() {
       setLoginError('يرجى إدخال بريد إلكتروني صحيح.');
       return;
     }
-    const found = authorizedMembers.find((m) => m.email.toLowerCase().trim() === clean);
+    const found =
+      clean === 'aalbinalshaikh@gmail.com'
+        ? {
+            id: 'mem-1',
+            name: 'أحمد عبدالكريم بو عبدالله',
+            email: 'aalbinalshaikh@gmail.com',
+            role: 'owner' as const,
+            villaId: 'all'
+          }
+        : authorizedMembers.find((m) => m.email.toLowerCase().trim() === clean);
+
     if (!found) {
       setLoggedInEmail(null);
       setCurrentRole('guest');
-      setLoginError('أنت غير مصرح بالدخول راجع مسؤول التطبيق');
-      showToast('error', 'أنت غير مصرح بالدخول راجع مسؤول التطبيق');
+      setLoginError('أنت غير مصرح بالدخول، راجع مسؤول التطبيق');
+      showToast('error', 'أنت غير مصرح بالدخول، راجع مسؤول التطبيق');
       return;
     }
     setLoggedInEmail(found.email);
@@ -586,7 +877,12 @@ export default function App() {
     showToast('success', `أهلاً بك ${found.name} — تم تفعيل صلاحيات التحكم الكاملة`);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      if (isFirebaseInitialized && firebaseAuth) {
+        await signOut(firebaseAuth).catch(() => {});
+      }
+    } catch {}
     setLoggedInEmail(null);
     setCurrentRole('guest');
     showToast('success', 'تم تسجيل الخروج — تم التبديل إلى وضع الضيف (للمشاهدة فقط)');
@@ -604,60 +900,32 @@ export default function App() {
     [allSnags, currentVilla]
   );
 
-  // الملاحظات المتأخرة في كافة الفلل
-  const allDelayedSnags = useMemo(
-    () => allSnags.filter((s) => getDelayDays(s) > 0).sort((a, b) => getDelayDays(b) - getDelayDays(a)),
-    [allSnags]
-  );
+  const addLogEntry = async (villaId: string, action: string, snagNumber: string, details: string) => {
+    const actor = matchedMember
+      ? `${matchedMember.name} (${currentRole === 'owner' ? 'مالك' : currentRole === 'contractor' ? 'مقاول' : 'مشرف'})`
+      : 'مستخدم';
+    const newLog: AuditLog = {
+      id: `log-${Date.now()}`,
+      villaId,
+      action,
+      snagNumber,
+      actorRole: actor,
+      timestamp: new Date().toLocaleString('ar-SA'),
+      details
+    };
+    setAuditLogs((prev) => [newLog, ...prev]);
 
-  // الملاحظات المتأخرة الخاصة بالفيلا المختارة حالياً
-  const currentVillaDelayedSnags = useMemo(
-    () => (currentVilla ? allDelayedSnags.filter((s) => s.villaId === currentVilla.id) : []),
-    [allDelayedSnags, currentVilla]
-  );
-
-  // عداد زر المتأخرات في الهيدر العلوي
-  const headerDelayedCount = currentVilla ? currentVillaDelayedSnags.length : allDelayedSnags.length;
-
-  const handleSelectVilla = (villaId: string) => {
-    setSelectedVillaId(villaId);
-    setSelectedSnagId(null);
-    setActiveTab('dashboard');
-    setSearchQuery('');
-    setFilterFloor('الكل');
-    setFilterStatus('الكل');
-    setFilterCategory('الكل');
-    setFilterDelayedOnly(false);
-  };
-
-  const handleOpenDelayedModalFromHeader = () => {
-    if (currentVilla) {
-      setDelayModalVillaFilter(currentVilla.id);
-    } else {
-      setDelayModalVillaFilter('all');
+    if (isFirebaseInitialized && firebaseDb) {
+      try {
+        await setDoc(doc(firebaseDb, 'audit_logs', newLog.id), newLog);
+      } catch {}
     }
-    setIsDelayModalOpen(true);
   };
 
-  const addLogEntry = (villaId: string, action: string, snagNumber: string, details: string) => {
-    const actor = matchedMember ? `${matchedMember.name} (${currentRole === 'owner' ? 'مالك' : currentRole === 'contractor' ? 'مقاول' : 'مشرف'})` : 'مستخدم';
-    setAuditLogs((prev) => [
-      {
-        id: `log-${Date.now()}`,
-        villaId,
-        action,
-        snagNumber,
-        actorRole: actor,
-        timestamp: new Date().toLocaleString('ar-SA'),
-        details
-      },
-      ...prev
-    ]);
-  };
-
-  // حفظ ملاحظة جديدة أو معدلة
-  const handleSaveSnag = (formData: Partial<SnagItem>) => {
+  // حفظ ملاحظة جديدة أو معدلة (في State + localStorage + Firestore)
+  const handleSaveSnag = async (formData: Partial<SnagItem>) => {
     if (!currentVilla) return;
+    setIsSyncing(true);
     const nowFormatted = new Date().toLocaleString('ar-SA', {
       year: 'numeric',
       month: '2-digit',
@@ -666,76 +934,88 @@ export default function App() {
       minute: '2-digit'
     });
 
-    if (editingSnag) {
-      setAllSnags((prev) =>
-        prev.map((item) =>
-          item.id === editingSnag.id
-            ? {
-                ...item,
-                ...formData
-              }
-            : item
-        )
-      );
-      addLogEntry(currentVilla.id, 'تعديل ملاحظة', editingSnag.snagNumber, `تم تعديل: ${formData.title}`);
-      showToast('success', `تم حفظ التعديلات على الملاحظة ${editingSnag.snagNumber}`);
-    } else {
-      const maxSeq = villaSnags.reduce((max, item) => {
-        const m = item.snagNumber.match(/-(\d+)$/);
-        const n = m ? parseInt(m[1], 10) : 0;
-        return n > max ? n : max;
-      }, 0);
-      const nextNum = `${currentVilla.prefix}-${String(maxSeq + 1).padStart(3, '0')}`;
-      const actorName = matchedMember?.name || currentVilla.ownerName;
+    try {
+      if (editingSnag) {
+        const updatedItem: SnagItem = {
+          ...editingSnag,
+          ...formData
+        };
+        setAllSnags((prev) =>
+          prev.map((item) => (item.id === editingSnag.id ? updatedItem : item))
+        );
+        if (isFirebaseInitialized && firebaseDb) {
+          await setDoc(doc(firebaseDb, 'snags', updatedItem.id), updatedItem, { merge: true }).catch(() => {});
+        }
+        await addLogEntry(currentVilla.id, 'تعديل ملاحظة', editingSnag.snagNumber, `تم تعديل: ${formData.title}`);
+        showToast('success', `تم حفظ التعديلات على الملاحظة ${editingSnag.snagNumber} بنجاح`);
+      } else {
+        const maxSeq = villaSnags.reduce((max, item) => {
+          const m = item.snagNumber.match(/-(\d+)$/);
+          const n = m ? parseInt(m[1], 10) : 0;
+          return n > max ? n : max;
+        }, 0);
+        const nextNum = `${currentVilla.prefix}-${String(maxSeq + 1).padStart(3, '0')}`;
+        const actorName = matchedMember?.name || currentVilla.ownerName;
+        const newId = `snag-${Date.now()}`;
 
-      const newSnag: SnagItem = {
-        id: `snag-${Date.now()}`,
-        villaId: currentVilla.id,
-        snagNumber: nextNum,
-        title: formData.title || '',
-        description: formData.description || '',
-        category: formData.category || CATEGORIES[0],
-        floor: formData.floor || FLOORS[0],
-        location: formData.location || LOCATIONS_BY_FLOOR[FLOORS[0]][0],
-        status: 'رصد الملاحظة',
-        priority: formData.priority || 'متوسط',
-        createdAt: formData.createdAt || todayStr,
-        targetDate: formData.targetDate || todayStr,
-        villaNumber: currentVilla.villaNumber,
-        blockNumber: currentVilla.blockNumber,
-        beforeImage:
-          formData.beforeImage ||
-          makeDocPhoto(`توثيق: ${formData.title}`, `فيلا ${currentVilla.villaNumber} - بلوك ${currentVilla.blockNumber}`, '#334155'),
-        steps: [
-          { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: nowFormatted, actor: actorName, note: 'تم رصد الملاحظة وإدراجها للمقاول' },
-          { stepNumber: 2, title: 'استلام المقاول', completed: false },
-          { stepNumber: 3, title: 'جاري الإصلاح', completed: false },
-          { stepNumber: 4, title: 'تم الإغلاق والاعتماد', completed: false }
-        ],
-        comments: []
-      };
+        const newSnag: SnagItem = {
+          id: newId,
+          villaId: currentVilla.id,
+          snagNumber: nextNum,
+          title: formData.title || '',
+          description: formData.description || '',
+          category: formData.category || CATEGORIES[0],
+          floor: formData.floor || FLOORS[0],
+          location: formData.location || LOCATIONS_BY_FLOOR[FLOORS[0]][0],
+          status: 'رصد الملاحظة',
+          priority: formData.priority || 'متوسط',
+          createdAt: formData.createdAt || todayStr,
+          targetDate: formData.targetDate || todayStr,
+          villaNumber: currentVilla.villaNumber,
+          blockNumber: currentVilla.blockNumber,
+          beforeImage:
+            formData.beforeImage ||
+            makeDocPhoto(`توثيق: ${formData.title}`, `فيلا ${currentVilla.villaNumber} - بلوك ${currentVilla.blockNumber}`, '#334155'),
+          steps: [
+            { stepNumber: 1, title: 'رصد الملاحظة', completed: true, timestamp: nowFormatted, actor: actorName, note: 'تم رصد الملاحظة وإدراجها للمقاول' },
+            { stepNumber: 2, title: 'إشعار المقاول', completed: false },
+            { stepNumber: 3, title: 'المعالجة والتنفيذ', completed: false },
+            { stepNumber: 4, title: 'الفحص والاعتماد', completed: false }
+          ],
+          comments: []
+        };
 
-      setAllSnags((prev) => [newSnag, ...prev]);
-      addLogEntry(currentVilla.id, 'إضافة ملاحظة جديدة', nextNum, `إضافة: ${newSnag.title}`);
-      showToast('success', `تم تسجيل الملاحظة برقم ${nextNum} في فيلا ${currentVilla.villaNumber}`);
+        setAllSnags((prev) => [newSnag, ...prev]);
+        if (isFirebaseInitialized && firebaseDb) {
+          await setDoc(doc(firebaseDb, 'snags', newId), newSnag).catch(() => {});
+        }
+        await addLogEntry(currentVilla.id, 'إضافة ملاحظة جديدة', nextNum, `إضافة: ${newSnag.title}`);
+        showToast('success', `تم حفظ الملاحظة برقم ${nextNum} في فيلا ${currentVilla.villaNumber}`);
+      }
+    } finally {
+      setIsSyncing(false);
+      setIsFormModalOpen(false);
+      setEditingSnag(null);
     }
-
-    setIsFormModalOpen(false);
-    setEditingSnag(null);
   };
 
-  // حذف ملاحظة
-  const handleDeleteSnag = () => {
+  // حذف ملاحظة (من State + localStorage + Firestore)
+  const handleDeleteSnag = async () => {
     if (!deleteConfirmSnag) return;
-    setAllSnags((prev) => prev.filter((s) => s.id !== deleteConfirmSnag.id));
-    addLogEntry(deleteConfirmSnag.villaId, 'حذف ملاحظة', deleteConfirmSnag.snagNumber, `تم حذف: ${deleteConfirmSnag.title}`);
-    if (selectedSnagId === deleteConfirmSnag.id) setSelectedSnagId(null);
-    showToast('success', `تم حذف الملاحظة ${deleteConfirmSnag.snagNumber} نهائياً`);
+    const targetToDelete = deleteConfirmSnag;
+    setAllSnags((prev) => prev.filter((s) => s.id !== targetToDelete.id));
+    if (selectedSnagId === targetToDelete.id) setSelectedSnagId(null);
     setDeleteConfirmSnag(null);
+
+    if (isFirebaseInitialized && firebaseDb) {
+      await deleteDoc(doc(firebaseDb, 'snags', targetToDelete.id)).catch(() => {});
+    }
+    await addLogEntry(targetToDelete.villaId, 'حذف ملاحظة', targetToDelete.snagNumber, `تم حذف: ${targetToDelete.title}`);
+    showToast('success', `تم حذف الملاحظة ${targetToDelete.snagNumber} نهائياً`);
   };
 
-  // تحديث مرحلة العمل من المخطط الزمني الرباعي (4 مراحل)
-  const handleAdvanceStep = (snag: SnagItem, targetStep: number, noteText?: string, rating?: number) => {
+  // تحديث مرحلة العمل من المخطط الزمني الرباعي (4 مراحل) وحفظه فوراً
+  const handleAdvanceStep = async (snag: SnagItem, targetStep: number, noteText?: string, rating?: number) => {
     const nowFormatted = new Date().toLocaleString('ar-SA', {
       year: 'numeric',
       month: '2-digit',
@@ -749,9 +1029,9 @@ export default function App() {
 
     const statusMap: Record<number, SnagItem['status']> = {
       1: 'رصد الملاحظة',
-      2: 'استلام المقاول',
-      3: 'جاري الإصلاح',
-      4: 'تم الإغلاق والاعتماد'
+      2: 'إشعار المقاول',
+      3: 'المعالجة والتنفيذ',
+      4: 'الفحص والاعتماد'
     };
 
     const newStatus = statusMap[targetStep] || snag.status;
@@ -774,30 +1054,30 @@ export default function App() {
       };
     });
 
-    setAllSnags((prev) =>
-      prev.map((item) =>
-        item.id === snag.id
-          ? {
-              ...item,
-              status: newStatus,
-              approvedDate: targetStep === 4 ? todayStr : undefined,
-              qualityRating: targetStep === 4 ? rating || 5 : item.qualityRating,
-              afterImage:
-                targetStep >= 3 && !item.afterImage
-                  ? makeDocPhoto('توثيق أعمال الإصلاح', `${item.snagNumber} | تم التنفيذ`, '#065f46')
-                  : item.afterImage,
-              steps: updatedSteps
-            }
-          : item
-      )
-    );
+    const updatedSnag: SnagItem = {
+      ...snag,
+      status: newStatus,
+      approvedDate: targetStep === 4 ? todayStr : undefined,
+      qualityRating: targetStep === 4 ? rating || 5 : snag.qualityRating,
+      afterImage:
+        targetStep >= 3 && !snag.afterImage
+          ? makeDocPhoto('توثيق أعمال الإصلاح', `${snag.snagNumber} | تم التنفيذ`, '#065f46')
+          : snag.afterImage,
+      steps: updatedSteps
+    };
 
-    addLogEntry(snag.villaId, 'تحديث مرحلة التنفيذ', snag.snagNumber, `تم التحديث إلى: ${newStatus}`);
-    showToast('success', `تم تحديث حالة الملاحظة ${snag.snagNumber} إلى "${newStatus}"`);
+    setAllSnags((prev) => prev.map((item) => (item.id === snag.id ? updatedSnag : item)));
+
+    if (isFirebaseInitialized && firebaseDb) {
+      await setDoc(doc(firebaseDb, 'snags', snag.id), updatedSnag, { merge: true }).catch(() => {});
+    }
+
+    await addLogEntry(snag.villaId, 'تحديث مرحلة التنفيذ', snag.snagNumber, `تم التحديث إلى: ${newStatus}`);
+    showToast('success', `تم حفظ وتحديث حالة الملاحظة ${snag.snagNumber} إلى "${newStatus}"`);
   };
 
-  // إضافة تعليق
-  const handleAddComment = (snag: SnagItem, text: string) => {
+  // إضافة تعليق وحفظه
+  const handleAddComment = async (snag: SnagItem, text: string) => {
     if (!text.trim()) return;
     const nowFormatted = new Date().toLocaleString('ar-SA', {
       hour: '2-digit',
@@ -814,45 +1094,61 @@ export default function App() {
       timestamp: nowFormatted
     };
 
+    const updatedComments = [...snag.comments, newComment];
     setAllSnags((prev) =>
-      prev.map((item) => (item.id === snag.id ? { ...item, comments: [...item.comments, newComment] } : item))
+      prev.map((item) => (item.id === snag.id ? { ...item, comments: updatedComments } : item))
     );
-    showToast('success', 'تم إضافة التعليق بنجاح');
+
+    if (isFirebaseInitialized && firebaseDb) {
+      await updateDoc(doc(firebaseDb, 'snags', snag.id), { comments: updatedComments }).catch(() => {});
+    }
+    showToast('success', 'تم حفظ التعليق بنجاح');
   };
 
-  // إضافة بريد إلكتروني مصرح جديد
-  const handleAddAuthorizedEmail = (e: React.FormEvent) => {
+  // إضافة بريد إلكتروني مصرح جديد وحفظه
+  const handleAddAuthorizedEmail = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMemberName.trim() || !newMemberEmail.trim() || !newMemberEmail.includes('@')) {
       showToast('error', 'يرجى إدخال الاسم وبريد Gmail صحيح');
       return;
     }
-    const exists = authorizedMembers.some((m) => m.email.toLowerCase() === newMemberEmail.toLowerCase().trim());
+    const cleanEmail = newMemberEmail.toLowerCase().trim();
+    const exists = authorizedMembers.some((m) => m.email.toLowerCase() === cleanEmail);
     if (exists) {
       showToast('error', 'هذا البريد الإلكتروني مسجل مسبقاً في القائمة');
       return;
     }
-    setAuthorizedMembers((prev) => [
-      ...prev,
-      {
-        id: `mem-${Date.now()}`,
-        name: newMemberName.trim(),
-        email: newMemberEmail.toLowerCase().trim(),
-        role: 'owner',
-        villaId: newMemberVilla
-      }
-    ]);
+    const newMember: AuthorizedMember = {
+      id: `mem-${Date.now()}`,
+      name: newMemberName.trim(),
+      email: cleanEmail,
+      role: 'owner',
+      villaId: newMemberVilla
+    };
+    setAuthorizedMembers((prev) => [...prev, newMember]);
+    if (isFirebaseInitialized && firebaseDb) {
+      await setDoc(doc(firebaseDb, 'authorized_emails', newMember.id), newMember).catch(() => {});
+    }
     setNewMemberName('');
     setNewMemberEmail('');
-    showToast('success', 'تمت إضافة البريد الإلكتروني إلى قائمة المصرح لهم');
+    showToast('success', 'تم حفظ البريد الإلكتروني في قائمة المصرح لهم');
+  };
+
+  const handleRemoveAuthorizedEmail = async (member: AuthorizedMember) => {
+    if (member.email.toLowerCase() === 'aalbinalshaikh@gmail.com') return;
+    setAuthorizedMembers((prev) => prev.filter((x) => x.id !== member.id));
+    if (isFirebaseInitialized && firebaseDb) {
+      await deleteDoc(doc(firebaseDb, 'authorized_emails', member.id)).catch(() => {});
+    }
+    showToast('success', 'تم حذف البريد من قائمة المصرح لهم');
   };
 
   // إحصائيات الفيلا المختارة
   const villaStats = useMemo(() => {
     const total = villaSnags.length;
-    const closed = villaSnags.filter((s) => s.status === 'تم الإغلاق والاعتماد').length;
-    const inRepair = villaSnags.filter((s) => s.status === 'جاري الإصلاح').length;
-    const received = villaSnags.filter((s) => s.status === 'استلام المقاول').length;
+    const closed = villaSnags.filter((s) => s.status === 'الفحص والاعتماد').length;
+    const inRepair = villaSnags.filter((s) => s.status === 'المعالجة والتنفيذ').length;
+    const received = villaSnags.filter((s) => s.status === 'إشعار المقاول').length;
     const spotted = villaSnags.filter((s) => s.status === 'رصد الملاحظة').length;
     const delayed = villaSnags.filter((s) => getDelayDays(s) > 0);
     const completionPct = total > 0 ? Math.round((closed / total) * 100) : 0;
@@ -1067,6 +1363,22 @@ export default function App() {
             </div>
 
             <div className="p-4 space-y-5 flex-1">
+              {/* مؤشر حالة الحفظ والمزامنة */}
+              <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-[11px]">
+                <span className="text-slate-300 font-bold">حالة حفظ البيانات:</span>
+                {syncMode === 'cloud' ? (
+                  <span className="flex items-center gap-1.5 text-emerald-300 font-extrabold">
+                    <Cloud className="w-3.5 h-3.5" />
+                    <span>متصل بالسحابة (Firebase)</span>
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1.5 text-amber-300 font-extrabold">
+                    <HardDrive className="w-3.5 h-3.5" />
+                    <span>حفظ محلي دائم (نشط)</span>
+                  </span>
+                )}
+              </div>
+
               {/* بطاقة حالة الدخول بـ Gmail */}
               <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 space-y-3">
                 <div className="flex items-center justify-between">
@@ -1339,7 +1651,7 @@ export default function App() {
                 <div className="bg-emerald-50 px-4 py-3 rounded-2xl border border-emerald-200">
                   <span className="text-[11px] text-emerald-700 block font-bold">المعتمدة</span>
                   <strong className="text-xl font-black text-emerald-700">
-                    {allSnags.filter((s) => s.status === 'تم الإغلاق والاعتماد').length}
+                    {allSnags.filter((s) => s.status === 'الفحص والاعتماد').length}
                   </strong>
                 </div>
                 <button
@@ -1356,8 +1668,8 @@ export default function App() {
               {VILLAS_LIST.map((villa, idx) => {
                 const vSnags = allSnags.filter((s) => s.villaId === villa.id);
                 const vTotal = vSnags.length;
-                const vClosed = vSnags.filter((s) => s.status === 'تم الإغلاق والاعتماد').length;
-                const vRepair = vSnags.filter((s) => s.status === 'جاري الإصلاح').length;
+                const vClosed = vSnags.filter((s) => s.status === 'الفحص والاعتماد').length;
+                const vRepair = vSnags.filter((s) => s.status === 'المعالجة والتنفيذ').length;
                 const vDelayed = vSnags.filter((s) => getDelayDays(s) > 0).length;
                 const pct = vTotal > 0 ? Math.round((vClosed / vTotal) * 100) : 0;
 
@@ -1417,7 +1729,7 @@ export default function App() {
                           <strong className="text-base font-black text-emerald-700">{vClosed}</strong>
                         </div>
                         <div className="p-2.5 rounded-xl bg-blue-50 border border-blue-200/70">
-                          <span className="text-blue-700 block text-[11px]">جاري الإصلاح</span>
+                          <span className="text-blue-700 block text-[11px]">المعالجة</span>
                           <strong className="text-base font-black text-blue-700">{vRepair}</strong>
                         </div>
                         <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200/70">
@@ -1451,7 +1763,7 @@ export default function App() {
               </button>
 
               <div className="flex flex-wrap items-center gap-2">
-                {permissions.canApprove && selectedSnag.status !== 'تم الإغلاق والاعتماد' && (
+                {permissions.canApprove && selectedSnag.status !== 'الفحص والاعتماد' && (
                   <button
                     onClick={() => setReviewModalSnag(selectedSnag)}
                     className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 text-xs font-extrabold flex items-center gap-1.5 shadow-sm"
@@ -1701,61 +2013,37 @@ export default function App() {
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5">
               <div
                 onClick={() => {
-                  setFilterStatus('الكل');
-                  setFilterDelayedOnly(false);
-                  setActiveTab('snags');
-                }}
-                className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-teal-400 cursor-pointer transition"
-              >
-                <span className="text-xs text-slate-500 font-bold">إجمالي الملاحظات</span>
-                <div className="text-2xl font-black text-slate-900 mt-1">{villaStats.total}</div>
-              </div>
-
-              <div
-                onClick={() => {
-                  setFilterStatus('رصد الملاحظة');
-                  setFilterDelayedOnly(false);
-                  setActiveTab('snags');
-                }}
-                className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-slate-400 cursor-pointer transition"
-              >
-                <span className="text-xs text-slate-500 font-bold">1. رصد الملاحظة</span>
-                <div className="text-2xl font-black text-slate-700 mt-1">{villaStats.spotted}</div>
-              </div>
-
-              <div
-                onClick={() => {
-                  setFilterStatus('استلام المقاول');
+                  setFilterStatus('إشعار المقاول');
                   setFilterDelayedOnly(false);
                   setActiveTab('snags');
                 }}
                 className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-amber-400 cursor-pointer transition"
               >
-                <span className="text-xs text-amber-700 font-bold">2. استلام المقاول</span>
+                <span className="text-xs text-amber-700 font-bold">2. إشعار المقاول</span>
                 <div className="text-2xl font-black text-amber-600 mt-1">{villaStats.received}</div>
               </div>
 
               <div
                 onClick={() => {
-                  setFilterStatus('جاري الإصلاح');
+                  setFilterStatus('المعالجة والتنفيذ');
                   setFilterDelayedOnly(false);
                   setActiveTab('snags');
                 }}
                 className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-blue-400 cursor-pointer transition"
               >
-                <span className="text-xs text-blue-700 font-bold">3. جاري الإصلاح</span>
+                <span className="text-xs text-blue-700 font-bold">3. المعالجة والتنفيذ</span>
                 <div className="text-2xl font-black text-blue-600 mt-1">{villaStats.inRepair}</div>
               </div>
 
               <div
                 onClick={() => {
-                  setFilterStatus('تم الإغلاق والاعتماد');
+                  setFilterStatus('الفحص والاعتماد');
                   setFilterDelayedOnly(false);
                   setActiveTab('snags');
                 }}
                 className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-emerald-400 cursor-pointer transition"
               >
-                <span className="text-xs text-emerald-700 font-bold">4. تم الاعتماد</span>
+                <span className="text-xs text-emerald-700 font-bold">4. الفحص والاعتماد</span>
                 <div className="text-2xl font-black text-emerald-600 mt-1">{villaStats.closed}</div>
               </div>
             </div>
@@ -1768,7 +2056,7 @@ export default function App() {
                   {FLOORS.map((fl) => {
                     const count = villaSnags.filter((s) => s.floor === fl).length;
                     const closedCount = villaSnags.filter(
-                      (s) => s.floor === fl && s.status === 'تم الإغلاق والاعتماد'
+                      (s) => s.floor === fl && s.status === 'الفحص والاعتماد'
                     ).length;
                     const barPct = villaStats.total > 0 ? Math.round((count / villaStats.total) * 100) : 0;
                     return (
@@ -2164,7 +2452,7 @@ export default function App() {
                           <td className="py-2.5 px-3 text-center">
                             {m.email !== 'aalbinalshaikh@gmail.com' && (
                               <button
-                                onClick={() => setAuthorizedMembers((prev) => prev.filter((x) => x.id !== m.id))}
+                                onClick={() => handleRemoveAuthorizedEmail(m)}
                                 className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -2391,7 +2679,7 @@ export default function App() {
             </div>
 
             <p className="text-xs text-slate-600 leading-relaxed">
-              أدخل بريد <strong>Gmail</strong> المصرح له لتفعيل صلاحيات إضافة وتعديل واعتماد الملاحظات:
+              سجّل الدخول بحساب <strong>Google (Gmail)</strong> المصرح له لتفعيل صلاحيات الإضافة والتعديل والحذف والاعتماد:
             </p>
 
             {loginError && (
@@ -2401,15 +2689,24 @@ export default function App() {
               </div>
             )}
 
+            <button
+              type="button"
+              onClick={handleGooglePopupSignIn}
+              className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black shadow flex items-center justify-center gap-2"
+            >
+              <LogIn className="w-4 h-4 text-amber-400" />
+              <span>المتابعة باستخدام حساب Google (Gmail)</span>
+            </button>
+
             <form
               onSubmit={(e) => {
                 e.preventDefault();
                 handleAttemptLogin(loginEmailInput);
               }}
-              className="space-y-3"
+              className="space-y-3 pt-2 border-t border-slate-100"
             >
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">البريد الإلكتروني (Gmail)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">أو التحقق المباشر بالبريد الإلكتروني (Gmail)</label>
                 <input
                   type="email"
                   dir="ltr"
