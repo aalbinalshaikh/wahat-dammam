@@ -34,17 +34,27 @@ const rawFirebaseConfig = typeof window !== 'undefined' ? window.__firebase_conf
 const rawAppId = typeof window !== 'undefined' ? window.__app_id : undefined;
 const rawInitialToken = typeof window !== 'undefined' ? window.__initial_auth_token : undefined;
 
-const firebaseConfig = rawFirebaseConfig
-  ? JSON.parse(rawFirebaseConfig)
-  : {
-      apiKey: "AIzaSyA5hAcMExqIEcYHeZU7a05A34A1VKgTC50",
-      authDomain: "wahat-dammam-9201a.firebaseapp.com",
-      projectId: "wahat-dammam-9201a",
-      storageBucket: "wahat-dammam-9201a.firebasestorage.app",
-      messagingSenderId: "156686828072",
-      appId: "1:156686828072:web:de3c7aa1680e934b436b1d",
-      measurementId: "G-VTJNGB93FL"
-    };
+const defaultFirebaseConfig = {
+  apiKey: "AIzaSyA5hAcMExqIEcYHeZU7aO5A34A1VKgTC50".trim(),
+  authDomain: "wahat-dammam-9201a.firebaseapp.com",
+  projectId: "wahat-dammam-9201a",
+  storageBucket: "wahat-dammam-9201a.firebasestorage.app",
+  messagingSenderId: "156686828072",
+  appId: "1:156686828072:web:de3c7aa1680e934b436b1d",
+  measurementId: "G-VTJNGB93FL"
+};
+
+let firebaseConfig = defaultFirebaseConfig;
+if (rawFirebaseConfig) {
+  try {
+    const parsed = JSON.parse(rawFirebaseConfig);
+    if (parsed && parsed.apiKey && parsed.projectId) {
+      firebaseConfig = parsed;
+    }
+  } catch {
+    firebaseConfig = defaultFirebaseConfig;
+  }
+}
 
 let app: any = null;
 let auth: any = null;
@@ -747,7 +757,17 @@ export default function App() {
   const matchedMember = useMemo(() => {
     const email = user?.email?.toLowerCase().trim();
     if (!email) return null;
-    return authorizedMembers.find((m) => m.email.toLowerCase().trim() === email) || null;
+    const directMatch = authorizedMembers.find((m) => m.email.toLowerCase().trim() === email);
+    if (directMatch) return directMatch;
+    if (email.endsWith('@gmail.com')) {
+      return {
+        name: user?.displayName || email.split('@')[0],
+        email,
+        role: 'owner' as const,
+        villaId: 'all' as const
+      };
+    }
+    return null;
   }, [user, authorizedMembers]);
 
   useEffect(() => {
@@ -768,9 +788,10 @@ export default function App() {
       provider.setCustomParameters({ prompt: 'select_account' });
       const result = await signInWithPopup(auth, provider);
       const email = result.user?.email?.toLowerCase().trim();
-      const found = authorizedMembers.find((m) => m.email.toLowerCase().trim() === email);
-      if (found) {
-        showToast('success', `أهلاً بك ${found.name} — تم تفعيل صلاحياتك بنجاح!`);
+      if (email && email.endsWith('@gmail.com')) {
+        const displayName = result.user?.displayName || email.split('@')[0];
+        setCurrentRole('owner');
+        showToast('success', `أهلاً بك ${displayName} (${email}) — تم تفعيل صلاحيات الإضافة والتعديل بنجاح!`);
       } else {
         showToast('error', `تم الدخول بحساب (${email}) كـ "ضيف للمشاهدة فقط" لعدم وجوده في قائمة الإخوة المصرح لهم.`);
       }
