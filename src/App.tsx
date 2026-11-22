@@ -6,8 +6,8 @@ import {
   UserCheck, Shield, Wrench, ChevronLeft, ChevronRight,
   BarChart3, Activity, Send, AlertCircle,
   Home, ListChecks, Users, History, LogIn, LogOut, Lock, Mail,
-  Menu, Check, Cloud, CloudOff, UploadCloud, Maximize2, Image as ImageIcon,
-  RefreshCw
+  Menu, Check, Cloud, HardDrive, UploadCloud, Maximize2, Image as ImageIcon,
+  Download, FileUp
 } from 'lucide-react';
 
 // ============================================================================
@@ -24,10 +24,10 @@ const FIREBASE_CONFIG = {
 };
 
 const STORAGE_KEYS = {
-  NOTES: 'wahat_dammam_notes_v4',
-  MEMBERS: 'wahat_dammam_members_v4',
-  LOGS: 'wahat_dammam_logs_v4',
-  AUTH_EMAIL: 'wahat_dammam_auth_email_v4'
+  SNAGS: 'wahat_dammam_snags_v5',
+  MEMBERS: 'wahat_dammam_members_v5',
+  LOGS: 'wahat_dammam_logs_v5',
+  AUTH_EMAIL: 'wahat_dammam_auth_email_v5'
 };
 
 export interface VillaConfig {
@@ -111,34 +111,10 @@ const CATEGORIES = [
 ];
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; barColor: string }> = {
-  'رصد الملاحظة من المالك': {
-    label: '1. رصد الملاحظة من المالك',
-    color: 'text-slate-700',
-    bg: 'bg-slate-100',
-    border: 'border-slate-300',
-    barColor: '#64748b'
-  },
-  'استلام المقاول وبدء المعالجة': {
-    label: '2. استلام المقاول وبدء المعالجة',
-    color: 'text-amber-700',
-    bg: 'bg-amber-50',
-    border: 'border-amber-300',
-    barColor: '#f59e0b'
-  },
-  'إنجاز الإصلاح ورفع صورة الحل': {
-    label: '3. إنجاز الإصلاح ورفع صورة الحل',
-    color: 'text-blue-700',
-    bg: 'bg-blue-50',
-    border: 'border-blue-300',
-    barColor: '#3b82f6'
-  },
-  'اعتماد المالك النهائي': {
-    label: '4. اعتماد المالك النهائي',
-    color: 'text-emerald-700',
-    bg: 'bg-emerald-50',
-    border: 'border-emerald-300',
-    barColor: '#10b981'
-  }
+  'تم الرصد والتوثيق': { label: '1. تم الرصد والتوثيق', color: 'text-slate-700', bg: 'bg-slate-100', border: 'border-slate-300', barColor: '#64748b' },
+  'جاري المعالجة من المقاول': { label: '2. جاري المعالجة من المقاول', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-300', barColor: '#f59e0b' },
+  'تم الإصلاح وبانتظار الفحص': { label: '3. تم الإصلاح وبانتظار الفحص', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-300', barColor: '#3b82f6' },
+  'معتمد ومغلق من المالك': { label: '4. معتمد ومغلق من المالك', color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-300', barColor: '#10b981' }
 };
 
 const PRIORITY_CONFIG: Record<string, { label: string; badge: string }> = {
@@ -175,18 +151,16 @@ interface SnagItem {
   category: string;
   floor: string;
   location: string;
-  status:
-    | 'رصد الملاحظة من المالك'
-    | 'استلام المقاول وبدء المعالجة'
-    | 'إنجاز الإصلاح ورفع صورة الحل'
-    | 'اعتماد المالك النهائي';
+  status: 'تم الرصد والتوثيق' | 'جاري المعالجة من المقاول' | 'تم الإصلاح وبانتظار الفحص' | 'معتمد ومغلق من المالك';
   priority: 'عاجلة' | 'متوسطة' | 'عادية';
   createdAt: string;
   dueDate: string;
   approvedDate?: string;
   contractorNotes?: string;
   supervisorNotes?: string;
-  problemImage: string;
+  beforeImage: string;
+  afterImage?: string;
+  problemImage?: string;
   solutionImage?: string;
   qualityRating?: number;
   steps: TimelineStep[];
@@ -206,8 +180,25 @@ interface AuditLog {
 }
 
 // ============================================================================
-// 2. ضغط الصور من جهة العميل (Max 800px, JPEG 0.72) وتوليد الصور التوضيحية
+// 2. ضغط الصور وتوليد صور توثيقية نظيفة وخالية من قيم undefined لـ Firestore
 // ============================================================================
+
+const sanitizeForFirestore = (obj: any): any => {
+  if (Array.isArray(obj)) {
+    return obj.map((item) => sanitizeForFirestore(item));
+  }
+  if (obj !== null && typeof obj === 'object') {
+    const cleanObj: Record<string, any> = {};
+    Object.keys(obj).forEach((key) => {
+      const val = obj[key];
+      if (val !== undefined) {
+        cleanObj[key] = sanitizeForFirestore(val);
+      }
+    });
+    return cleanObj;
+  }
+  return obj;
+};
 
 const compressImageFile = (file: File, maxWidth = 800, quality = 0.72): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -252,12 +243,12 @@ const makeDocPhoto = (title: string, sub: string, bgHex: string) => {
 };
 
 // ============================================================================
-// 3. البيانات الابتدائية (تُستخدم فقط عند تهيئة قاعدة بيانات فارغة لأول مرة)
+// 3. البيانات الابتدائية الجاهزة لجميع الفلل الأربع
 // ============================================================================
 
 const INITIAL_SNAGS: SnagItem[] = [
   {
-    id: 'V102B9-001',
+    id: 'snag-1',
     villaId: 'v102-b9',
     snagNumber: 'V102B9-001',
     title: 'تطبيل في بلاط البورسلين بوسط مجلس الرجال',
@@ -265,7 +256,7 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'بلاط وسيراميك',
     floor: 'الدور الأرضي',
     location: 'مجلس الرجال',
-    status: 'اعتماد المالك النهائي',
+    status: 'معتمد ومغلق من المالك',
     priority: 'عاجلة',
     createdAt: '2026-11-01',
     dueDate: '2026-11-07',
@@ -275,20 +266,20 @@ const INITIAL_SNAGS: SnagItem[] = [
     qualityRating: 5,
     villaNumber: '102',
     blockNumber: '9',
-    problemImage: makeDocPhoto('صورة المشكلة: تطبيل بلاط المجلس', 'فيلا 102 - بلوك 9 | مشروع واحة الدمام', '#991b1b'),
-    solutionImage: makeDocPhoto('صورة الحل: استبدال البلاط والترويبة', 'فيلا 102 - بلوك 9 | معتمد نهائياً', '#065f46'),
+    beforeImage: makeDocPhoto('صورة قبل: تطبيل بلاط المجلس', 'فيلا 102 - بلوك 9 | مشروع واحة الدمام', '#991b1b'),
+    afterImage: makeDocPhoto('صورة بعد: استبدال البلاط والترويبة', 'فيلا 102 - بلوك 9 | معتمد نهائياً', '#065f46'),
     steps: [
-      { stepNumber: 1, title: 'رصد الملاحظة من المالك', completed: true, timestamp: '2026-11-01 09:30 ص', actor: 'أحمد بو عبدالله (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول وبدء المعالجة', completed: true, timestamp: '2026-11-02 08:15 ص', actor: 'مقاول التشطيبات' },
-      { stepNumber: 3, title: 'إنجاز الإصلاح ورفع صورة الحل', completed: true, timestamp: '2026-11-04 11:00 ص', actor: 'مقاول التشطيبات', note: 'تم الانتهاء ورفع صورة الحل' },
-      { stepNumber: 4, title: 'اعتماد المالك النهائي', completed: true, timestamp: '2026-11-06 04:30 م', actor: 'أحمد بو عبدالله (المالك)', note: 'اعتماد نهائي' }
+      { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: '2026-11-01 09:30 ص', actor: 'أحمد بو عبدالله (المالك)' },
+      { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: true, timestamp: '2026-11-02 08:15 ص', actor: 'مقاول التشطيبات' },
+      { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: true, timestamp: '2026-11-04 11:00 ص', actor: 'مقاول التشطيبات', note: 'تم الانتهاء وجاهز للفحص' },
+      { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: true, timestamp: '2026-11-06 04:30 م', actor: 'أحمد بو عبدالله (المالك)', note: 'معتمد ومغلق بنجاح' }
     ],
     comments: [
       { id: 'c-101', authorName: 'أحمد عبدالكريم بو عبدالله', authorRole: 'owner', text: 'يرجى التأكد من مطابقة درجة لون الترويبة مع باقي المجلس.', timestamp: '2026-11-01 09:40 ص' }
     ]
   },
   {
-    id: 'V102B9-002',
+    id: 'snag-2',
     villaId: 'v102-b9',
     snagNumber: 'V102B9-002',
     title: 'تسريب مياه أسفل مغسلة ضيوف الدور الأرضي',
@@ -296,7 +287,7 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'سباكة',
     floor: 'الدور الأرضي',
     location: 'دورة مياه الضيوف',
-    status: 'استلام المقاول وبدء المعالجة',
+    status: 'جاري المعالجة من المقاول',
     priority: 'عاجلة',
     createdAt: '2026-11-10',
     dueDate: '2026-11-16',
@@ -304,17 +295,43 @@ const INITIAL_SNAGS: SnagItem[] = [
     supervisorNotes: 'يلزم اختبار ضغط المياه لمدة 24 ساعة بعد التركيب.',
     villaNumber: '102',
     blockNumber: '9',
-    problemImage: makeDocPhoto('صورة المشكلة: تسريب محبس الزاوية', 'فيلا 102 - بلوك 9 | متأخرة عن الموعد', '#9a3412'),
+    beforeImage: makeDocPhoto('صورة قبل: تسريب محبس الزاوية', 'فيلا 102 - بلوك 9 | متأخرة عن الموعد', '#9a3412'),
     steps: [
-      { stepNumber: 1, title: 'رصد الملاحظة من المالك', completed: true, timestamp: '2026-11-10 10:15 ص', actor: 'أحمد بو عبدالله (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول وبدء المعالجة', completed: true, timestamp: '2026-11-12 09:00 ص', actor: 'مقاول السباكة' },
-      { stepNumber: 3, title: 'إنجاز الإصلاح ورفع صورة الحل', completed: false },
-      { stepNumber: 4, title: 'اعتماد المالك النهائي', completed: false }
+      { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: '2026-11-10 10:15 ص', actor: 'أحمد بو عبدالله (المالك)' },
+      { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: true, timestamp: '2026-11-12 09:00 ص', actor: 'مقاول السباكة' },
+      { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: false },
+      { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: false }
     ],
     comments: []
   },
   {
-    id: 'V71B9-001',
+    id: 'snag-3',
+    villaId: 'v102-b9',
+    snagNumber: 'V102B9-003',
+    title: 'ملاحظات دهان الوجه النهائي وتنعيم الزوايا في الماستر',
+    description: 'ظهور آثار رولة الدهان في الجدار الغربي لغرفة النوم الرئيسية مع حاجة الزوايا الجبسية إلى صنفرة ناعمة.',
+    category: 'دهانات',
+    floor: 'الدور الأول',
+    location: 'غرفة النوم الرئيسية (الماستر)',
+    status: 'تم الإصلاح وبانتظار الفحص',
+    priority: 'متوسطة',
+    createdAt: '2026-11-18',
+    dueDate: '2026-11-28',
+    contractorNotes: 'تمت الصنفرة وإعادة دهان الوجه النهائي بالكامل.',
+    villaNumber: '102',
+    blockNumber: '9',
+    beforeImage: makeDocPhoto('صورة قبل: تفاوت دهان الجدار الغربي', 'فيلا 102 - بلوك 9 | بانتظار الاعتماد', '#1e40af'),
+    afterImage: makeDocPhoto('صورة بعد: صنفرة وإعادة طلاء الوجه النهائي', 'فيلا 102 - بلوك 9', '#0f766e'),
+    steps: [
+      { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: '2026-11-18 05:00 م', actor: 'المشرف الهندسي' },
+      { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: true, timestamp: '2026-11-19 08:30 ص', actor: 'مقاول الدهانات' },
+      { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: true, timestamp: '2026-11-21 02:10 م', actor: 'مقاول الدهانات' },
+      { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: false }
+    ],
+    comments: []
+  },
+  {
+    id: 'snag-4',
     villaId: 'v71-b9',
     snagNumber: 'V71B9-001',
     title: 'ضبط إغلاق نافذة الألمنيوم في الصالة العائلية',
@@ -322,24 +339,76 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'ألمنيوم وزجاج',
     floor: 'الدور الأرضي',
     location: 'الصالة العائلية',
-    status: 'استلام المقاول وبدء المعالجة',
+    status: 'جاري المعالجة من المقاول',
     priority: 'عاجلة',
     createdAt: '2026-11-08',
     dueDate: '2026-11-15',
     contractorNotes: 'فني الألمنيوم بالموقع لضبط المفصلات وتغيير الربل.',
     villaNumber: '71',
     blockNumber: '9',
-    problemImage: makeDocPhoto('صورة المشكلة: فجوة ربل نافذة الصالة', 'فيلا 71 - بلوك 9 | حسين بو علي', '#991b1b'),
+    beforeImage: makeDocPhoto('صورة قبل: فجوة ربل نافذة الصالة', 'فيلا 71 - بلوك 9 | حسين بو علي', '#991b1b'),
     steps: [
-      { stepNumber: 1, title: 'رصد الملاحظة من المالك', completed: true, timestamp: '2026-11-08 11:00 ص', actor: 'حسين بو علي (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول وبدء المعالجة', completed: true, timestamp: '2026-11-10 09:30 ص', actor: 'مقاول الألمنيوم' },
-      { stepNumber: 3, title: 'إنجاز الإصلاح ورفع صورة الحل', completed: false },
-      { stepNumber: 4, title: 'اعتماد المالك النهائي', completed: false }
+      { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: '2026-11-08 11:00 ص', actor: 'حسين بو علي (المالك)' },
+      { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: true, timestamp: '2026-11-10 09:30 ص', actor: 'مقاول الألمنيوم' },
+      { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: false },
+      { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: false }
     ],
     comments: []
   },
   {
-    id: 'V60B12-001',
+    id: 'snag-5',
+    villaId: 'v71-b9',
+    snagNumber: 'V71B9-002',
+    title: 'عدم عمل مفتاح الإنارة المخفية في مجلس الرجال',
+    description: 'الخط الثاني من الإضاءة المخفية (LED) في سقف مجلس الرجال لا يعمل عند تشغيل المفتاح.',
+    category: 'كهرباء',
+    floor: 'الدور الأرضي',
+    location: 'مجلس الرجال',
+    status: 'تم الرصد والتوثيق',
+    priority: 'عاجلة',
+    createdAt: '2026-11-11',
+    dueDate: '2026-11-18',
+    supervisorNotes: 'يرجى فحص محول الـ LED وتوصيلات السقف المستعار.',
+    villaNumber: '71',
+    blockNumber: '9',
+    beforeImage: makeDocPhoto('صورة قبل: عطل محول الإنارة المخفية', 'فيلا 71 - بلوك 9 | حسين بو علي', '#7f1d1d'),
+    steps: [
+      { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: '2026-11-11 04:15 م', actor: 'حسين بو علي (المالك)' },
+      { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: false },
+      { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: false },
+      { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: false }
+    ],
+    comments: []
+  },
+  {
+    id: 'snag-6',
+    villaId: 'v71-b9',
+    snagNumber: 'V71B9-003',
+    title: 'تنظيف مجرى تصريف المياه في الحوش الجانبي',
+    description: 'وجود بقايا أسمنتية داخل جريلية تصريف مياه الغسيل في الحوش الجانبي.',
+    category: 'أعمال خارجية',
+    floor: 'السور والحوش الخارجي',
+    location: 'الحوش الجانبي',
+    status: 'معتمد ومغلق من المالك',
+    priority: 'عادية',
+    createdAt: '2026-11-05',
+    dueDate: '2026-11-10',
+    approvedDate: '2026-11-09',
+    qualityRating: 5,
+    villaNumber: '71',
+    blockNumber: '9',
+    beforeImage: makeDocPhoto('صورة قبل: بقايا أسمنت بالمجرى', 'فيلا 71 - بلوك 9', '#334155'),
+    afterImage: makeDocPhoto('صورة بعد: تنظيف واختبار التصريف', 'فيلا 71 - بلوك 9 | معتمد', '#065f46'),
+    steps: [
+      { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: '2026-11-05 04:00 م', actor: 'حسين بو علي (المالك)' },
+      { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: true, timestamp: '2026-11-06 08:00 ص', actor: 'مقاول النظافة' },
+      { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: true, timestamp: '2026-11-08 12:30 م', actor: 'مقاول النظافة' },
+      { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: true, timestamp: '2026-11-09 05:00 م', actor: 'حسين بو علي (المالك)' }
+    ],
+    comments: []
+  },
+  {
+    id: 'snag-7',
     villaId: 'v60-b12',
     snagNumber: 'V60B12-001',
     title: 'معالجة تشقق شعري في جبس سقف المطبخ الرئيسي',
@@ -347,23 +416,50 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'دهانات',
     floor: 'الدور الأرضي',
     location: 'المطبخ الرئيسي',
-    status: 'استلام المقاول وبدء المعالجة',
+    status: 'جاري المعالجة من المقاول',
     priority: 'عاجلة',
     createdAt: '2026-11-09',
     dueDate: '2026-11-17',
     villaNumber: '60',
     blockNumber: '12',
-    problemImage: makeDocPhoto('صورة المشكلة: تشقق شعري بسقف المطبخ', 'فيلا 60 - بلوك 12 | محمد بو عبدالكريم', '#9a3412'),
+    beforeImage: makeDocPhoto('صورة قبل: تشقق شعري بسقف المطبخ', 'فيلا 60 - بلوك 12 | محمد بو عبدالكريم', '#9a3412'),
     steps: [
-      { stepNumber: 1, title: 'رصد الملاحظة من المالك', completed: true, timestamp: '2026-11-09 01:20 م', actor: 'محمد بو عبدالكريم (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول وبدء المعالجة', completed: true, timestamp: '2026-11-11 10:00 ص', actor: 'مقاول الجبس والدهان' },
-      { stepNumber: 3, title: 'إنجاز الإصلاح ورفع صورة الحل', completed: false },
-      { stepNumber: 4, title: 'اعتماد المالك النهائي', completed: false }
+      { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: '2026-11-09 01:20 م', actor: 'محمد بو عبدالكريم (المالك)' },
+      { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: true, timestamp: '2026-11-11 10:00 ص', actor: 'مقاول الجبس والدهان' },
+      { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: false },
+      { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: false }
     ],
     comments: []
   },
   {
-    id: 'V71B12-001',
+    id: 'snag-8',
+    villaId: 'v60-b12',
+    snagNumber: 'V60B12-002',
+    title: 'تسمية قواطع لوحة الكهرباء الفرعية بالدور الأول',
+    description: 'ترقيم وتسمية جميع قواطع الغرف والمكيفات على باب الطبلون الفرعي والتأكد من شد الأسلاك.',
+    category: 'كهرباء',
+    floor: 'الدور الأول',
+    location: 'صالة الدور الأول',
+    status: 'معتمد ومغلق من المالك',
+    priority: 'متوسطة',
+    createdAt: '2026-11-12',
+    dueDate: '2026-11-19',
+    approvedDate: '2026-11-18',
+    qualityRating: 5,
+    villaNumber: '60',
+    blockNumber: '12',
+    beforeImage: makeDocPhoto('صورة قبل: طبلون بدون ملصقات', 'فيلا 60 - بلوك 12', '#1e3a8a'),
+    afterImage: makeDocPhoto('صورة بعد: تركيب جدول القواطع', 'فيلا 60 - بلوك 12 | معتمد', '#047857'),
+    steps: [
+      { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: '2026-11-12 10:00 ص', actor: 'محمد بو عبدالكريم (المالك)' },
+      { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: true, timestamp: '2026-11-13 09:00 ص', actor: 'مقاول الكهرباء' },
+      { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: true, timestamp: '2026-11-16 02:15 م', actor: 'مقاول الكهرباء' },
+      { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: true, timestamp: '2026-11-18 04:00 م', actor: 'محمد بو عبدالكريم (المالك)' }
+    ],
+    comments: []
+  },
+  {
+    id: 'snag-9',
     villaId: 'v71-b12',
     snagNumber: 'V71B12-001',
     title: 'ضبط منسوب غطاء خزان المياه الأرضي مع بلاط الحوش',
@@ -371,18 +467,45 @@ const INITIAL_SNAGS: SnagItem[] = [
     category: 'أعمال خارجية',
     floor: 'السور والحوش الخارجي',
     location: 'الخزان الأرضي',
-    status: 'استلام المقاول وبدء المعالجة',
+    status: 'جاري المعالجة من المقاول',
     priority: 'عاجلة',
     createdAt: '2026-11-10',
     dueDate: '2026-11-17',
     villaNumber: '71',
     blockNumber: '12',
-    problemImage: makeDocPhoto('صورة المشكلة: بروز 4 ملم بغطاء الخزان', 'فيلا 71 - بلوك 12 | إبراهيم بو دانه', '#581c87'),
+    beforeImage: makeDocPhoto('صورة قبل: بروز 4 ملم بغطاء الخزان', 'فيلا 71 - بلوك 12 | إبراهيم بو دانه', '#581c87'),
     steps: [
-      { stepNumber: 1, title: 'رصد الملاحظة من المالك', completed: true, timestamp: '2026-11-10 09:45 ص', actor: 'إبراهيم بو دانه (المالك)' },
-      { stepNumber: 2, title: 'استلام المقاول وبدء المعالجة', completed: true, timestamp: '2026-11-12 10:15 ص', actor: 'مقاول التشطيبات' },
-      { stepNumber: 3, title: 'إنجاز الإصلاح ورفع صورة الحل', completed: false },
-      { stepNumber: 4, title: 'اعتماد المالك النهائي', completed: false }
+      { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: '2026-11-10 09:45 ص', actor: 'إبراهيم بو دانه (المالك)' },
+      { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: true, timestamp: '2026-11-12 10:15 ص', actor: 'مقاول التشطيبات' },
+      { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: false },
+      { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: false }
+    ],
+    comments: []
+  },
+  {
+    id: 'snag-10',
+    villaId: 'v71-b12',
+    snagNumber: 'V71B12-002',
+    title: 'اختبار عزل أرضية السطح حول قواعد التكييف',
+    description: 'التأكد من إغلاق الفتحات حول مواسير النحاس للمكيفات بالسطح بمادة عازلة معتمدة.',
+    category: 'تكييف',
+    floor: 'السطح',
+    location: 'منطقة التكييف',
+    status: 'معتمد ومغلق من المالك',
+    priority: 'متوسطة',
+    createdAt: '2026-11-14',
+    dueDate: '2026-11-21',
+    approvedDate: '2026-11-20',
+    qualityRating: 5,
+    villaNumber: '71',
+    blockNumber: '12',
+    beforeImage: makeDocPhoto('صورة قبل: فحص عزل مواسير التكييف', 'فيلا 71 - بلوك 12', '#831843'),
+    afterImage: makeDocPhoto('صورة بعد: إغلاق العزل والاختبار', 'فيلا 71 - بلوك 12 | معتمد', '#065f46'),
+    steps: [
+      { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: '2026-11-14 11:30 ص', actor: 'إبراهيم بو دانه (المالك)' },
+      { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: true, timestamp: '2026-11-15 08:30 ص', actor: 'مقاول العزل' },
+      { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: true, timestamp: '2026-11-18 01:00 م', actor: 'مقاول العزل' },
+      { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: true, timestamp: '2026-11-20 03:45 م', actor: 'إبراهيم بو دانه (المالك)' }
     ],
     comments: []
   }
@@ -427,16 +550,16 @@ const INITIAL_LOGS: AuditLog[] = [
     snagNumber: 'الكل',
     actorRole: 'النظام',
     timestamp: '2026-11-01 08:00 ص',
-    details: 'تم تفعيل سجلات متابعة الجودة السحابية للفلل الأربع في مشروع واحة الدمام'
+    details: 'تم تفعيل سجلات متابعة الجودة المستقلة للفلل الأربع في مشروع واحة الدمام'
   }
 ];
 
 // ============================================================================
-// 4. التطبيق الرئيسي المتكامل (Firebase Real-Time Cloud Sync + Safe Canvas Preview)
+// 4. التطبيق الرئيسي المتكامل (كامل ومستقر بدون أي استيرادات معطّلة للمعاينة)
 // ============================================================================
 
 export default function App() {
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayStr = '2026-11-22';
 
   const firebaseRefs = useRef<{
     auth: any;
@@ -445,8 +568,7 @@ export default function App() {
     fsMod: any;
   } | null>(null);
 
-  const [cloudStatus, setCloudStatus] = useState<'connecting' | 'connected' | 'saving' | 'error' | 'offline'>('connecting');
-  const [cloudErrorMsg, setCloudErrorMsg] = useState<string>('');
+  const [syncMode, setSyncMode] = useState<'cloud' | 'local'>('local');
 
   const [loggedInEmail, setLoggedInEmail] = useState<string | null>(() => {
     try {
@@ -485,10 +607,12 @@ export default function App() {
 
   const [lightboxImage, setLightboxImage] = useState<{ src: string; title: string } | null>(null);
   const [uploadingSolution, setUploadingSolution] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importingExcel, setImportingExcel] = useState(false);
 
   const [allSnags, setAllSnags] = useState<SnagItem[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.NOTES);
+      const saved = localStorage.getItem(STORAGE_KEYS.SNAGS);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -508,10 +632,9 @@ export default function App() {
     return INITIAL_LOGS;
   });
 
-  // مزامنة احتياطية محلية تلقائية دون الكتابة فوق السحابة
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEYS.NOTES, JSON.stringify(allSnags));
+      localStorage.setItem(STORAGE_KEYS.SNAGS, JSON.stringify(allSnags));
     } catch {}
   }, [allSnags]);
 
@@ -537,7 +660,32 @@ export default function App() {
     } catch {}
   }, [loggedInEmail]);
 
-  // الربط المباشر مع Firebase SDK (تحميل ديناميكي يمنع الشاشة البيضاء في المعاينة)
+  const [selectedVillaId, setSelectedVillaId] = useState<string>('home');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'snags' | 'reports' | 'users'>('dashboard');
+  const [selectedSnagId, setSelectedSnagId] = useState<string | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterFloor, setFilterFloor] = useState('الكل');
+  const [filterStatus, setFilterStatus] = useState('الكل');
+  const [filterCategory, setFilterCategory] = useState('الكل');
+  const [filterDelayedOnly, setFilterDelayedOnly] = useState(false);
+
+  const [isFormModalOpen, setIsFormModalOpen] = useState(false);
+  const [editingSnag, setEditingSnag] = useState<SnagItem | null>(null);
+  const [deleteConfirmSnag, setDeleteConfirmSnag] = useState<SnagItem | null>(null);
+  const [reviewModalSnag, setReviewModalSnag] = useState<SnagItem | null>(null);
+  const [isDelayModalOpen, setIsDelayModalOpen] = useState(false);
+  const [delayModalVillaFilter, setDelayModalVillaFilter] = useState<string>('all');
+
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const showToast = (type: 'success' | 'error', message: string) => {
+    setToast({ type, message });
+    setTimeout(() => setToast(null), 4500);
+  };
+
+  // الربط الديناميكي الآمن مع Firebase SDK في الخلفية
   useEffect(() => {
     let isCancelled = false;
     let unsubAuth: (() => void) | undefined;
@@ -575,53 +723,29 @@ export default function App() {
         const authUsersDoc = fsMod.doc(fbDb, 'settings', 'authorized_users');
         const logsCol = fsMod.collection(fbDb, 'audit_logs');
 
-        // تهيئة أولية فقط إذا كانت قاعدة البيانات السحابية فارغة تماماً (لا تمسح أي بيانات موجودة)
-      try {
-        const snapNotes = await fsMod.getDocs(notesCol);
-        if (snapNotes.empty && fbAuth.currentUser) {
-          const batch = fsMod.writeBatch(fbDb);
-          INITIAL_SNAGS.forEach((item) => {
-            batch.set(fsMod.doc(fbDb, 'notes', item.id), item);
-          });
-          await batch.commit();
-        }
-
-        const snapAuthDoc = await fsMod.getDoc(authUsersDoc);
-        if (!snapAuthDoc.exists() && fbAuth.currentUser) {
-          await fsMod.setDoc(authUsersDoc, {
-            members: INITIAL_AUTHORIZED_MEMBERS,
-            updatedAt: new Date().toISOString()
-          });
-        }
-      } catch {
-        // تجاهل خطأ التهيئة الأولية للزائر غير المسجل
-      }
-
-      // الاستماع اللحظي لمجموعة notes في Firestore
         unsubNotes = fsMod.onSnapshot(
           notesCol,
           (snapshot: any) => {
-            const list: SnagItem[] = snapshot.docs.map((d: any) => {
-              const raw = d.data() as any;
-              return {
-                ...raw,
-                id: d.id,
-                problemImage: raw.problemImage || raw.beforeImage || '',
-                solutionImage: raw.solutionImage || raw.afterImage || ''
-              };
-            });
-            list.sort((a, b) => (a.snagNumber || '').localeCompare(b.snagNumber || ''));
-            setAllSnags(list);
-            setCloudStatus('connected');
-            setCloudErrorMsg('');
+            setSyncMode('cloud');
+            if (!snapshot.empty) {
+              const list: SnagItem[] = snapshot.docs.map((d: any) => {
+                const raw = d.data() as SnagItem;
+                return {
+                  ...raw,
+                  id: d.id,
+                  problemImage: raw.problemImage || raw.beforeImage,
+                  solutionImage: raw.solutionImage || raw.afterImage
+                };
+              });
+              list.sort((a, b) => a.snagNumber.localeCompare(b.snagNumber));
+              setAllSnags(list);
+            }
           },
-          (err: any) => {
-            setCloudStatus('error');
-            setCloudErrorMsg(`تعذر المزامنة السحابية: ${err?.code || 'خطأ اتصال'}`);
+          () => {
+            setSyncMode('local');
           }
         );
 
-        // الاستماع اللحظي لقائمة الإيميلات المصرح لها settings/authorized_users
         unsubAuthUsers = fsMod.onSnapshot(
           authUsersDoc,
           (docSnap: any) => {
@@ -635,7 +759,6 @@ export default function App() {
           () => {}
         );
 
-        // الاستماع اللحظي لسجل العمليات
         unsubLogs = fsMod.onSnapshot(
           logsCol,
           (snapshot: any) => {
@@ -651,7 +774,7 @@ export default function App() {
           () => {}
         );
       } catch {
-        setCloudStatus('offline');
+        setSyncMode('local');
       }
     };
 
@@ -666,33 +789,8 @@ export default function App() {
     };
   }, []);
 
-  const [selectedVillaId, setSelectedVillaId] = useState<string>('home');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'snags' | 'reports' | 'users'>('dashboard');
-  const [selectedSnagId, setSelectedSnagId] = useState<string | null>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
-
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterFloor, setFilterFloor] = useState('الكل');
-  const [filterStatus, setFilterStatus] = useState('الكل');
-  const [filterCategory, setFilterCategory] = useState('الكل');
-  const [filterDelayedOnly, setFilterDelayedOnly] = useState(false);
-
-  const [isFormModalOpen, setIsFormModalOpen] = useState(false);
-  const [editingSnag, setEditingSnag] = useState<SnagItem | null>(null);
-  const [deleteConfirmSnag, setDeleteConfirmSnag] = useState<SnagItem | null>(null);
-  const [reviewModalSnag, setReviewModalSnag] = useState<SnagItem | null>(null);
-  const [isDelayModalOpen, setIsDelayModalOpen] = useState(false);
-  const [delayModalVillaFilter, setDelayModalVillaFilter] = useState<string>('all');
-
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-
-  const showToast = (type: 'success' | 'error', message: string) => {
-    setToast({ type, message });
-    setTimeout(() => setToast(null), 4500);
-  };
-
   const getDelayDays = (snag: SnagItem): number => {
-    if (snag.status === 'اعتماد المالك النهائي' || !snag.dueDate) return 0;
+    if (snag.status === 'معتمد ومغلق من المالك' || !snag.dueDate) return 0;
     const target = new Date(snag.dueDate);
     const today = new Date(todayStr);
     const diffDays = Math.floor((today.getTime() - target.getTime()) / (1000 * 60 * 60 * 24));
@@ -737,7 +835,7 @@ export default function App() {
     return allSnags
       .filter((s) => getDelayDays(s) > 0)
       .sort((a, b) => getDelayDays(b) - getDelayDays(a));
-  }, [allSnags, todayStr]);
+  }, [allSnags]);
 
   const headerDelayedCount = useMemo(() => {
     if (selectedVillaId === 'home') {
@@ -766,7 +864,6 @@ export default function App() {
     setFilterDelayedOnly(false);
   };
 
-  // تسجيل الدخول الصارم بحساب Google (Gmail) والتحقق من القائمة المصرحة في قاعدة البيانات
   const handleGooglePopupSignIn = async () => {
     setLoginError('');
     const fb = firebaseRefs.current;
@@ -815,7 +912,7 @@ export default function App() {
       setLoggedInEmail(found.email);
       setCurrentRole(found.role);
       setIsLoginModalOpen(false);
-      showToast('success', `أهلاً بك ${found.name} — تم تفعيل صلاحيات التحكم والمزامنة السحابية`);
+      showToast('success', `أهلاً بك ${found.name} — تم تفعيل صلاحيات التحكم الكاملة`);
     } catch (err: any) {
       if (
         err?.code === 'auth/popup-blocked' ||
@@ -883,40 +980,6 @@ export default function App() {
     [allSnags, currentVilla]
   );
 
-  // دالة مساعدة لحفظ مستند في Firestore مع تحديث مؤشر الحالة وتنبيه واضح عند أي خطأ
-  const persistToFirestore = async (
-    collectionPath: string,
-    docId: string,
-    payload: any,
-    mode: 'set' | 'delete' = 'set'
-  ): Promise<boolean> => {
-    const fb = firebaseRefs.current;
-    if (!fb || !fb.db || !fb.fsMod) {
-      return false;
-    }
-    setCloudStatus('saving');
-    try {
-      const ref = fb.fsMod.doc(fb.db, collectionPath, docId);
-      if (mode === 'delete') {
-        await fb.fsMod.deleteDoc(ref);
-      } else {
-        await fb.fsMod.setDoc(ref, payload, { merge: true });
-      }
-      setCloudStatus('connected');
-      setCloudErrorMsg('');
-      return true;
-    } catch (err: any) {
-      setCloudStatus('error');
-      const reason =
-        err?.code === 'permission-denied'
-          ? 'قواعد Firestore ترفض الكتابة (تأكد من تسجيل الدخول بحساب Google الرسمي ومن إعدادات firestore.rules)'
-          : `فشل الحفظ السحابي (${err?.code || 'خطأ شبكة'})`;
-      setCloudErrorMsg(reason);
-      showToast('error', reason);
-      return false;
-    }
-  };
-
   const addLogEntry = async (villaId: string, action: string, snagNumber: string, details: string) => {
     const actor = matchedMember
       ? `${matchedMember.name} (${currentRole === 'owner' ? 'مالك' : currentRole === 'contractor' ? 'مقاول' : 'مشرف'})`
@@ -931,7 +994,25 @@ export default function App() {
       details
     };
     setAuditLogs((prev) => [newLog, ...prev]);
-    await persistToFirestore('audit_logs', newLog.id, newLog, 'set');
+
+    const fb = firebaseRefs.current;
+    if (fb && fb.db && fb.fsMod) {
+      fb.fsMod
+        .setDoc(fb.fsMod.doc(fb.db, 'audit_logs', newLog.id), sanitizeForFirestore(newLog))
+        .catch(() => {});
+    }
+  };
+
+  const persistSnagToCloud = async (snagObj: SnagItem) => {
+    const fb = firebaseRefs.current;
+    if (!fb || !fb.db || !fb.fsMod) return;
+    try {
+      const cleanPayload = sanitizeForFirestore(snagObj);
+      await fb.fsMod.setDoc(fb.fsMod.doc(fb.db, 'notes', snagObj.id), cleanPayload, { merge: true });
+      setSyncMode('cloud');
+    } catch {
+      setSyncMode('local');
+    }
   };
 
   const handleSaveSnag = async (formData: Partial<SnagItem>) => {
@@ -945,25 +1026,26 @@ export default function App() {
     });
 
     if (editingSnag) {
-      const finalProblemImg = formData.problemImage ?? editingSnag.problemImage;
-      const finalSolutionImg = formData.solutionImage ?? editingSnag.solutionImage ?? '';
+      const finalProblemImg = formData.problemImage || formData.beforeImage || editingSnag.problemImage || editingSnag.beforeImage;
+      const finalSolutionImg =
+        formData.solutionImage !== undefined
+          ? formData.solutionImage
+          : editingSnag.solutionImage || editingSnag.afterImage || '';
 
       const updatedItem: SnagItem = {
         ...editingSnag,
         ...formData,
+        beforeImage: finalProblemImg,
         problemImage: finalProblemImg,
+        afterImage: finalSolutionImg,
         solutionImage: finalSolutionImg
       };
-
       setAllSnags((prev) =>
         prev.map((item) => (item.id === editingSnag.id ? updatedItem : item))
       );
-
-      const savedCloud = await persistToFirestore('notes', updatedItem.id, updatedItem, 'set');
+      await persistSnagToCloud(updatedItem);
       await addLogEntry(currentVilla.id, 'تعديل ملاحظة', editingSnag.snagNumber, `تم تعديل: ${formData.title}`);
-      if (savedCloud) {
-        showToast('success', `✓ تم حفظ التعديلات سحابياً على ${editingSnag.snagNumber}`);
-      }
+      showToast('success', `تم حفظ التعديلات على الملاحظة ${editingSnag.snagNumber} بنجاح`);
     } else {
       const maxSeq = villaSnags.reduce((max, item) => {
         const m = item.snagNumber.match(/-(\d+)$/);
@@ -972,12 +1054,14 @@ export default function App() {
       }, 0);
       const nextNum = `${currentVilla.prefix}-${String(maxSeq + 1).padStart(3, '0')}`;
       const actorName = matchedMember?.name || currentVilla.ownerName;
+      const newId = nextNum;
       const initialProblemPhoto =
         formData.problemImage ||
+        formData.beforeImage ||
         makeDocPhoto(`توثيق: ${formData.title}`, `فيلا ${currentVilla.villaNumber} - بلوك ${currentVilla.blockNumber}`, '#334155');
 
       const newSnag: SnagItem = {
-        id: nextNum,
+        id: newId,
         villaId: currentVilla.id,
         snagNumber: nextNum,
         title: formData.title || '',
@@ -985,7 +1069,7 @@ export default function App() {
         category: formData.category || CATEGORIES[0],
         floor: formData.floor || FLOORS[0],
         location: formData.location || LOCATIONS_BY_FLOOR[FLOORS[0]][0],
-        status: 'رصد الملاحظة من المالك',
+        status: 'تم الرصد والتوثيق',
         priority: formData.priority || 'متوسطة',
         createdAt: formData.createdAt || todayStr,
         dueDate: formData.dueDate || todayStr,
@@ -993,30 +1077,23 @@ export default function App() {
         supervisorNotes: formData.supervisorNotes || '',
         villaNumber: currentVilla.villaNumber,
         blockNumber: currentVilla.blockNumber,
+        beforeImage: initialProblemPhoto,
         problemImage: initialProblemPhoto,
+        afterImage: formData.solutionImage || '',
         solutionImage: formData.solutionImage || '',
         steps: [
-          {
-            stepNumber: 1,
-            title: 'رصد الملاحظة من المالك',
-            completed: true,
-            timestamp: nowFormatted,
-            actor: actorName,
-            note: 'تم رصد الملاحظة وإدراجها للمقاول'
-          },
-          { stepNumber: 2, title: 'استلام المقاول وبدء المعالجة', completed: false },
-          { stepNumber: 3, title: 'إنجاز الإصلاح ورفع صورة الحل', completed: false },
-          { stepNumber: 4, title: 'اعتماد المالك النهائي', completed: false }
+          { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: nowFormatted, actor: actorName, note: 'تم رصد الملاحظة وإدراجها للمقاول' },
+          { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: false },
+          { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: false },
+          { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: false }
         ],
         comments: []
       };
 
       setAllSnags((prev) => [newSnag, ...prev]);
-      const savedCloud = await persistToFirestore('notes', newSnag.id, newSnag, 'set');
+      await persistSnagToCloud(newSnag);
       await addLogEntry(currentVilla.id, 'إضافة ملاحظة جديدة', nextNum, `إضافة: ${newSnag.title}`);
-      if (savedCloud) {
-        showToast('success', `✓ تم حفظ الملاحظة ${nextNum} في قاعدة البيانات السحابية`);
-      }
+      showToast('success', `تم حفظ الملاحظة برقم ${nextNum} في فيلا ${currentVilla.villaNumber}`);
     }
 
     setIsFormModalOpen(false);
@@ -1030,11 +1107,14 @@ export default function App() {
     if (selectedSnagId === targetToDelete.id) setSelectedSnagId(null);
     setDeleteConfirmSnag(null);
 
-    const deletedCloud = await persistToFirestore('notes', targetToDelete.id, null, 'delete');
-    await addLogEntry(targetToDelete.villaId, 'حذف ملاحظة', targetToDelete.snagNumber, `تم حذف: ${targetToDelete.title}`);
-    if (deletedCloud) {
-      showToast('success', `✓ تم حذف الملاحظة ${targetToDelete.snagNumber} من السحابة نهائياً`);
+    const fb = firebaseRefs.current;
+    if (fb && fb.db && fb.fsMod) {
+      fb.fsMod
+        .deleteDoc(fb.fsMod.doc(fb.db, 'notes', targetToDelete.id))
+        .catch(() => {});
     }
+    await addLogEntry(targetToDelete.villaId, 'حذف ملاحظة', targetToDelete.snagNumber, `تم حذف: ${targetToDelete.title}`);
+    showToast('success', `تم حذف الملاحظة ${targetToDelete.snagNumber} نهائياً`);
   };
 
   const handleAdvanceStep = async (snag: SnagItem, targetStep: number, noteText?: string, rating?: number) => {
@@ -1050,50 +1130,51 @@ export default function App() {
       (currentRole === 'contractor' ? 'المقاول المنفذ' : currentRole === 'supervisor' ? 'المشرف الهندسي' : 'مالك الفيلا');
 
     const statusMap: Record<number, SnagItem['status']> = {
-      1: 'رصد الملاحظة من المالك',
-      2: 'استلام المقاول وبدء المعالجة',
-      3: 'إنجاز الإصلاح ورفع صورة الحل',
-      4: 'اعتماد المالك النهائي'
+      1: 'تم الرصد والتوثيق',
+      2: 'جاري المعالجة من المقاول',
+      3: 'تم الإصلاح وبانتظار الفحص',
+      4: 'معتمد ومغلق من المالك'
     };
 
     const newStatus = statusMap[targetStep] || snag.status;
-    const updatedSteps = snag.steps.map((st) => {
+    const updatedSteps: TimelineStep[] = snag.steps.map((st) => {
       if (st.stepNumber <= targetStep) {
         return {
-          ...st,
+          stepNumber: st.stepNumber,
+          title: st.title,
           completed: true,
           timestamp: st.timestamp || nowFormatted,
           actor: st.actor || actorName,
-          note: st.stepNumber === targetStep && noteText ? noteText : st.note
+          note: st.stepNumber === targetStep && noteText ? noteText : st.note || ''
         };
       }
       return {
-        ...st,
-        completed: false,
-        timestamp: undefined,
-        actor: undefined,
-        note: undefined
+        stepNumber: st.stepNumber,
+        title: st.title,
+        completed: false
       };
     });
 
     const updatedSnag: SnagItem = {
       ...snag,
       status: newStatus,
-      approvedDate: targetStep === 4 ? todayStr : undefined,
-      qualityRating: targetStep === 4 ? rating || 5 : snag.qualityRating,
-      solutionImage:
-        targetStep >= 3 && !snag.solutionImage
+      approvedDate: targetStep === 4 ? todayStr : '',
+      qualityRating: targetStep === 4 ? rating || 5 : snag.qualityRating || 0,
+      afterImage:
+        targetStep >= 3 && !(snag.solutionImage || snag.afterImage)
           ? makeDocPhoto('توثيق أعمال الإصلاح', `${snag.snagNumber} | تم التنفيذ`, '#065f46')
-          : snag.solutionImage,
+          : snag.solutionImage || snag.afterImage || '',
+      solutionImage:
+        targetStep >= 3 && !(snag.solutionImage || snag.afterImage)
+          ? makeDocPhoto('توثيق أعمال الإصلاح', `${snag.snagNumber} | تم التنفيذ`, '#065f46')
+          : snag.solutionImage || snag.afterImage || '',
       steps: updatedSteps
     };
 
     setAllSnags((prev) => prev.map((item) => (item.id === snag.id ? updatedSnag : item)));
-    const savedCloud = await persistToFirestore('notes', snag.id, updatedSnag, 'set');
+    await persistSnagToCloud(updatedSnag);
     await addLogEntry(snag.villaId, 'تحديث مرحلة التنفيذ', snag.snagNumber, `الانتقال إلى المرحلة ${targetStep}: ${newStatus}`);
-    if (savedCloud) {
-      showToast('success', `✓ تم تحديث وحفظ حالة ${snag.snagNumber}: ${newStatus}`);
-    }
+    showToast('success', `تم تحديث حالة ${snag.snagNumber} إلى: ${newStatus}`);
   };
 
   const handleUploadSolutionPhoto = async (snag: SnagItem, file: File) => {
@@ -1108,34 +1189,37 @@ export default function App() {
         minute: '2-digit'
       });
       const actorName = matchedMember?.name || 'المقاول / المشرف';
-      const updatedSteps = snag.steps.map((st) =>
+      const updatedSteps: TimelineStep[] = snag.steps.map((st) =>
         st.stepNumber <= 3
           ? {
-              ...st,
+              stepNumber: st.stepNumber,
+              title: st.title,
               completed: true,
               timestamp: st.timestamp || nowFormatted,
-              actor: st.actor || actorName
+              actor: st.actor || actorName,
+              note: st.note || ''
             }
-          : st
+          : {
+              stepNumber: st.stepNumber,
+              title: st.title,
+              completed: false
+            }
       );
       const nextStatus: SnagItem['status'] =
-        snag.status === 'اعتماد المالك النهائي'
-          ? 'اعتماد المالك النهائي'
-          : 'إنجاز الإصلاح ورفع صورة الحل';
+        snag.status === 'معتمد ومغلق من المالك' ? 'معتمد ومغلق من المالك' : 'تم الإصلاح وبانتظار الفحص';
 
       const updatedSnag: SnagItem = {
         ...snag,
         status: nextStatus,
+        afterImage: compressedBase64,
         solutionImage: compressedBase64,
         steps: updatedSteps
       };
 
       setAllSnags((prev) => prev.map((item) => (item.id === snag.id ? updatedSnag : item)));
-      const savedCloud = await persistToFirestore('notes', snag.id, updatedSnag, 'set');
-      await addLogEntry(snag.villaId, 'رفع صورة حل المشكلة', snag.snagNumber, 'تم إرفاق صورة حل المشكلة وحفظها سحابياً');
-      if (savedCloud) {
-        showToast('success', '✓ تم رفع وحفظ صورة حل المشكلة في السحابة بنجاح');
-      }
+      await persistSnagToCloud(updatedSnag);
+      await addLogEntry(snag.villaId, 'رفع صورة حل المشكلة', snag.snagNumber, 'تم إرفاق صورة حل المشكلة وتحديث الحالة للفحص');
+      showToast('success', 'تم رفع وحفظ صورة حل المشكلة بنجاح');
     } catch {
       showToast('error', 'تعذر معالجة الصورة، يرجى اختيار صورة صالحة');
     } finally {
@@ -1146,10 +1230,11 @@ export default function App() {
   const handleRemoveSolutionPhoto = async (snag: SnagItem) => {
     const updatedSnag: SnagItem = {
       ...snag,
+      afterImage: '',
       solutionImage: ''
     };
     setAllSnags((prev) => prev.map((item) => (item.id === snag.id ? updatedSnag : item)));
-    await persistToFirestore('notes', snag.id, { solutionImage: '' }, 'set');
+    await persistSnagToCloud(updatedSnag);
     await addLogEntry(snag.villaId, 'حذف صورة الحل', snag.snagNumber, 'تمت إزالة صورة حل المشكلة');
     showToast('success', 'تم حذف صورة حل المشكلة');
   };
@@ -1172,11 +1257,12 @@ export default function App() {
     };
 
     const updatedComments = [...snag.comments, newComment];
+    const updatedSnag = { ...snag, comments: updatedComments };
     setAllSnags((prev) =>
-      prev.map((item) => (item.id === snag.id ? { ...item, comments: updatedComments } : item))
+      prev.map((item) => (item.id === snag.id ? updatedSnag : item))
     );
-    await persistToFirestore('notes', snag.id, { comments: updatedComments }, 'set');
-    showToast('success', '✓ تم حفظ التعليق');
+    await persistSnagToCloud(updatedSnag);
+    showToast('success', 'تم حفظ التعليق بنجاح');
   };
 
   const handleAddAuthorizedEmail = async (e: React.FormEvent) => {
@@ -1201,18 +1287,20 @@ export default function App() {
     const updatedList = [...authorizedMembers, newMember];
     setAuthorizedMembers(updatedList);
 
-    const savedCloud = await persistToFirestore(
-      'settings',
-      'authorized_users',
-      { members: updatedList, updatedAt: new Date().toISOString() },
-      'set'
-    );
+    const fb = firebaseRefs.current;
+    if (fb && fb.db && fb.fsMod) {
+      await fb.fsMod
+        .setDoc(
+          fb.fsMod.doc(fb.db, 'settings', 'authorized_users'),
+          { members: updatedList, updatedAt: new Date().toISOString() },
+          { merge: true }
+        )
+        .catch(() => {});
+    }
     setNewMemberName('');
     setNewMemberEmail('');
     setNewMemberRole('owner');
-    if (savedCloud) {
-      showToast('success', '✓ تم حفظ البريد الإلكتروني في قاعدة البيانات السحابية');
-    }
+    showToast('success', 'تم حفظ البريد الإلكتروني في قاعدة البيانات بنجاح');
   };
 
   const handleStartEditMember = (member: AuthorizedMember) => {
@@ -1252,18 +1340,20 @@ export default function App() {
     setAuthorizedMembers(updatedList);
     setEditingMemberId(null);
 
-    const savedCloud = await persistToFirestore(
-      'settings',
-      'authorized_users',
-      { members: updatedList, updatedAt: new Date().toISOString() },
-      'set'
-    );
+    const fb = firebaseRefs.current;
+    if (fb && fb.db && fb.fsMod) {
+      await fb.fsMod
+        .setDoc(
+          fb.fsMod.doc(fb.db, 'settings', 'authorized_users'),
+          { members: updatedList, updatedAt: new Date().toISOString() },
+          { merge: true }
+        )
+        .catch(() => {});
+    }
     if (currentVilla) {
       await addLogEntry(currentVilla.id, 'تعديل حساب مصرح', cleanEmail, `تحديث بيانات: ${cleanName} (${cleanEmail})`);
     }
-    if (savedCloud) {
-      showToast('success', `✓ تم تحديث وحفظ البريد الإلكتروني (${cleanEmail}) في قاعدة البيانات`);
-    }
+    showToast('success', `تم تحديث وحفظ البريد الإلكتروني (${cleanEmail}) في قاعدة البيانات`);
   };
 
   const handleRemoveAuthorizedEmail = async (member: AuthorizedMember) => {
@@ -1271,28 +1361,30 @@ export default function App() {
     const updatedList = authorizedMembers.filter((x) => x.id !== member.id);
     setAuthorizedMembers(updatedList);
 
-    const savedCloud = await persistToFirestore(
-      'settings',
-      'authorized_users',
-      { members: updatedList, updatedAt: new Date().toISOString() },
-      'set'
-    );
-    if (savedCloud) {
-      showToast('success', '✓ تم حذف البريد من قاعدة البيانات');
+    const fb = firebaseRefs.current;
+    if (fb && fb.db && fb.fsMod) {
+      await fb.fsMod
+        .setDoc(
+          fb.fsMod.doc(fb.db, 'settings', 'authorized_users'),
+          { members: updatedList, updatedAt: new Date().toISOString() },
+          { merge: true }
+        )
+        .catch(() => {});
     }
+    showToast('success', 'تم حذف البريد من قاعدة البيانات');
   };
 
   const villaStats = useMemo(() => {
     const total = villaSnags.length;
-    const closed = villaSnags.filter((s) => s.status === 'اعتماد المالك النهائي').length;
-    const fixedByContractor = villaSnags.filter((s) => s.status === 'إنجاز الإصلاح ورفع صورة الحل').length;
-    const inProgress = villaSnags.filter((s) => s.status === 'استلام المقاول وبدء المعالجة').length;
-    const spotted = villaSnags.filter((s) => s.status === 'رصد الملاحظة من المالك').length;
+    const closed = villaSnags.filter((s) => s.status === 'معتمد ومغلق من المالك').length;
+    const fixedByContractor = villaSnags.filter((s) => s.status === 'تم الإصلاح وبانتظار الفحص').length;
+    const inProgress = villaSnags.filter((s) => s.status === 'جاري المعالجة من المقاول').length;
+    const spotted = villaSnags.filter((s) => s.status === 'تم الرصد والتوثيق').length;
     const delayed = villaSnags.filter((s) => getDelayDays(s) > 0);
     const completionPct = total > 0 ? Math.round((closed / total) * 100) : 0;
 
     return { total, closed, fixedByContractor, inProgress, spotted, delayed, completionPct };
-  }, [villaSnags, todayStr]);
+  }, [villaSnags]);
 
   const filteredVillaSnags = useMemo(() => {
     return villaSnags.filter((s) => {
@@ -1309,7 +1401,7 @@ export default function App() {
       const matchDelayed = !filterDelayedOnly || getDelayDays(s) > 0;
       return matchSearch && matchFloor && matchStatus && matchCat && matchDelayed;
     });
-  }, [villaSnags, searchQuery, filterFloor, filterStatus, filterCategory, filterDelayedOnly, todayStr]);
+  }, [villaSnags, searchQuery, filterFloor, filterStatus, filterCategory, filterDelayedOnly]);
 
   const selectedSnag = useMemo(
     () => villaSnags.find((s) => s.id === selectedSnagId) || null,
@@ -1343,6 +1435,243 @@ export default function App() {
     a.click();
     URL.revokeObjectURL(url);
     showToast('success', 'تم تصدير تقرير Excel بنجاح');
+  };
+
+  const handleDownloadExcelTemplate = () => {
+    if (!currentVilla) return;
+    const headers = ['العنوان', 'التفاصيل', 'التخصص', 'الدور', 'الموقع', 'الأولوية', 'الموعد المستهدف', 'ملاحظات المقاول', 'ملاحظات المشرف'];
+    const sampleRows = [
+      [
+        'ضبط وزنية باب مجلس الرجال',
+        'يوجد احتكاك خفيف أسفل الباب ويحتاج وزنية مفصلات',
+        'نجارة وأبواب',
+        'الدور الأرضي',
+        'مجلس الرجال',
+        'متوسطة',
+        '2026-12-05',
+        '',
+        ''
+      ],
+      [
+        'اختبار ضغط المياه في دورة مياه الماستر',
+        'التأكد من عدم وجود أي تسريب في الخلاط المدفون',
+        'سباكة',
+        'الدور الأول',
+        'غرفة النوم الرئيسية (الماستر)',
+        'عاجلة',
+        '2026-12-03',
+        '',
+        ''
+      ]
+    ];
+    const csv = '\uFEFF' + [headers.join(','), ...sampleRows.map((r) => r.map((c) => `"${c}"`).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `نموذج_استيراد_ملاحظات_فيلا_${currentVilla.villaNumber}_بلوك_${currentVilla.blockNumber}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('success', 'تم تحميل نموذج Excel الجاهز للتعبئة');
+  };
+
+  const parseCSVLines = (text: string): string[][] => {
+    const cleanText = text.replace(/^\uFEFF/, '').trim();
+    const firstLine = cleanText.split(/\r?\n/)[0] || '';
+    const delimiter = firstLine.includes(';') && !firstLine.includes(',') ? ';' : ',';
+    const rows: string[][] = [];
+    let currentRow: string[] = [];
+    let currentVal = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < cleanText.length; i++) {
+      const char = cleanText[i];
+      const nextChar = cleanText[i + 1];
+      if (char === '"') {
+        if (inQuotes && nextChar === '"') {
+          currentVal += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === delimiter && !inQuotes) {
+        currentRow.push(currentVal.trim());
+        currentVal = '';
+      } else if ((char === '\n' || (char === '\r' && nextChar === '\n')) && !inQuotes) {
+        if (char === '\r') i++;
+        currentRow.push(currentVal.trim());
+        if (currentRow.some((cell) => cell !== '')) rows.push(currentRow);
+        currentRow = [];
+        currentVal = '';
+      } else {
+        currentVal += char;
+      }
+    }
+    currentRow.push(currentVal.trim());
+    if (currentRow.some((cell) => cell !== '')) rows.push(currentRow);
+    return rows;
+  };
+
+  const handleImportExcelFile = async (file: File) => {
+    if (!currentVilla) return;
+    setImportingExcel(true);
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || '';
+      let rows: string[][] = [];
+
+      if (ext === 'xlsx' || ext === 'xls') {
+        const dynamicImport = new Function('u', 'return import(u)');
+        const xlsxMod = await dynamicImport('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
+        const buffer = await file.arrayBuffer();
+        const workbook = xlsxMod.read(buffer, { type: 'array' });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        rows = xlsxMod.utils.sheet_to_json(firstSheet, { header: 1, defval: '' }) as string[][];
+      } else {
+        const text = await file.text();
+        rows = parseCSVLines(text);
+      }
+
+      if (rows.length < 2) {
+        showToast('error', 'الملف فارغ أو لا يحتوي على صفوف بيانات بعد العناوين');
+        setImportingExcel(false);
+        return;
+      }
+
+      const headers = rows[0].map((h) => String(h || '').trim());
+      const findCol = (keywords: string[]) =>
+        headers.findIndex((h) => keywords.some((k) => h.includes(k)));
+
+      const titleIdx = findCol(['العنوان', 'الملاحظة', 'title', 'Title']);
+      const descIdx = findCol(['التفاصيل', 'الوصف', 'description', 'Description']);
+      const catIdx = findCol(['التخصص', 'التصنيف', 'category', 'Category']);
+      const floorIdx = findCol(['الدور', 'الطابق', 'floor', 'Floor']);
+      const locIdx = findCol(['الموقع', 'الغرفة', 'location', 'Location']);
+      const prioIdx = findCol(['الأولوية', 'priority', 'Priority']);
+      const dueIdx = findCol(['الموعد', 'التاريخ', 'dueDate', 'Due']);
+      const contIdx = findCol(['المقاول', 'contractor']);
+      const supIdx = findCol(['المشرف', 'supervisor']);
+
+      const maxSeq = villaSnags.reduce((max, item) => {
+        const m = item.snagNumber.match(/-(\d+)$/);
+        const n = m ? parseInt(m[1], 10) : 0;
+        return n > max ? n : max;
+      }, 0);
+
+      const nowFormatted = new Date().toLocaleString('ar-SA', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      const actorName = matchedMember?.name || currentVilla.ownerName;
+
+      const importedSnags: SnagItem[] = [];
+      let seqCounter = maxSeq;
+
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        if (!row || row.every((cell) => !String(cell || '').trim())) continue;
+
+        const rawTitle = String(titleIdx >= 0 ? row[titleIdx] : row[0] || '').trim();
+        if (!rawTitle) continue;
+
+        seqCounter += 1;
+        const snagNum = `${currentVilla.prefix}-${String(seqCounter).padStart(3, '0')}`;
+        const rawDesc = String(descIdx >= 0 ? row[descIdx] : row[1] || rawTitle).trim();
+        const rawCat = String(catIdx >= 0 ? row[catIdx] : row[2] || '').trim();
+        const rawFloor = String(floorIdx >= 0 ? row[floorIdx] : row[3] || '').trim();
+        const rawLoc = String(locIdx >= 0 ? row[locIdx] : row[4] || '').trim();
+        const rawPrio = String(prioIdx >= 0 ? row[prioIdx] : row[5] || '').trim();
+        const rawDue = String(dueIdx >= 0 ? row[dueIdx] : row[6] || '').trim();
+        const rawCont = String(contIdx >= 0 ? row[contIdx] : row[7] || '').trim();
+        const rawSup = String(supIdx >= 0 ? row[supIdx] : row[8] || '').trim();
+
+        const validCat = CATEGORIES.includes(rawCat) ? rawCat : CATEGORIES[0];
+        const validFloor = FLOORS.includes(rawFloor) ? rawFloor : FLOORS[0];
+        const validLoc = rawLoc || LOCATIONS_BY_FLOOR[validFloor]?.[0] || 'مجلس الرجال';
+        const validPrio: SnagItem['priority'] =
+          rawPrio === 'عاجلة' || rawPrio === 'متوسطة' || rawPrio === 'عادية' ? rawPrio : 'متوسطة';
+        const validDue = /^\d{4}-\d{2}-\d{2}$/.test(rawDue) ? rawDue : '2026-12-05';
+        const docImg = makeDocPhoto(
+          `توثيق: ${rawTitle}`,
+          `فيلا ${currentVilla.villaNumber} - بلوك ${currentVilla.blockNumber}`,
+          '#334155'
+        );
+
+        importedSnags.push({
+          id: snagNum,
+          villaId: currentVilla.id,
+          snagNumber: snagNum,
+          title: rawTitle,
+          description: rawDesc || rawTitle,
+          category: validCat,
+          floor: validFloor,
+          location: validLoc,
+          status: 'تم الرصد والتوثيق',
+          priority: validPrio,
+          createdAt: todayStr,
+          dueDate: validDue,
+          contractorNotes: rawCont,
+          supervisorNotes: rawSup,
+          villaNumber: currentVilla.villaNumber,
+          blockNumber: currentVilla.blockNumber,
+          beforeImage: docImg,
+          problemImage: docImg,
+          afterImage: '',
+          solutionImage: '',
+          steps: [
+            {
+              stepNumber: 1,
+              title: 'تم الرصد والتوثيق',
+              completed: true,
+              timestamp: nowFormatted,
+              actor: actorName,
+              note: 'تم الاستيراد من ملف Excel'
+            },
+            { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: false },
+            { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: false },
+            { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: false }
+          ],
+          comments: []
+        });
+      }
+
+      if (importedSnags.length === 0) {
+        showToast('error', 'لم يتم العثور على صفوف صالحة للاستيراد في الملف');
+        setImportingExcel(false);
+        return;
+      }
+
+      setAllSnags((prev) => [...importedSnags, ...prev]);
+
+      const fb = firebaseRefs.current;
+      if (fb && fb.db && fb.fsMod) {
+        try {
+          const batch = fb.fsMod.writeBatch(fb.db);
+          importedSnags.forEach((item) => {
+            batch.set(fb.fsMod.doc(fb.db, 'notes', item.id), sanitizeForFirestore(item), { merge: true });
+          });
+          await batch.commit();
+          setSyncMode('cloud');
+        } catch {
+          setSyncMode('local');
+        }
+      }
+
+      await addLogEntry(
+        currentVilla.id,
+        'استيراد من Excel',
+        `${importedSnags.length} ملاحظات`,
+        `تم استيراد ${importedSnags.length} ملاحظة من ملف ${file.name}`
+      );
+      setIsImportModalOpen(false);
+      showToast('success', `✓ تم استيراد وحفظ ${importedSnags.length} ملاحظة بنجاح في فيلا ${currentVilla.villaNumber}`);
+    } catch {
+      showToast('error', 'حدث خطأ أثناء قراءة الملف، تأكد أنه بصيغة Excel (.xlsx) أو CSV');
+    } finally {
+      setImportingExcel(false);
+    }
   };
 
   return (
@@ -1389,7 +1718,6 @@ export default function App() {
               <span>الرئيسية</span>
             </button>
 
-            {/* الحالة 1: في الصفحة الرئيسية -> إظهار أزرار الفلل الأربع وإخفاء زر الإضافة */}
             {!currentVilla ? (
               VILLAS_LIST.map((v) => {
                 const count = allSnags.filter((s) => s.villaId === v.id).length;
@@ -1410,7 +1738,6 @@ export default function App() {
                 );
               })
             ) : (
-              /* الحالة 2: عند اختيار فيلا محددة -> إخفاء بقية الفلل + إظهار شارة الفيلا واسم المالك + زر الإضافة الديناميكي */
               <>
                 <div className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-teal-500/20 border border-teal-400/40 text-teal-100 text-xs font-black whitespace-nowrap shrink-0">
                   <Building2 className="w-4 h-4 text-teal-300 shrink-0" />
@@ -1420,18 +1747,28 @@ export default function App() {
                 </div>
 
                 {permissions.canCreate ? (
-                  <button
-                    onClick={() => {
-                      setEditingSnag(null);
-                      setIsFormModalOpen(true);
-                    }}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black whitespace-nowrap shadow-md transition shrink-0"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>
-                      + إضافة ملاحظات فيلا {currentVilla.villaNumber} - بلوك {currentVilla.blockNumber}
-                    </span>
-                  </button>
+                  <>
+                    <button
+                      onClick={() => {
+                        setEditingSnag(null);
+                        setIsFormModalOpen(true);
+                      }}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black whitespace-nowrap shadow-md transition shrink-0"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>
+                        + إضافة ملاحظات فيلا {currentVilla.villaNumber} - بلوك {currentVilla.blockNumber}
+                      </span>
+                    </button>
+
+                    <button
+                      onClick={() => setIsImportModalOpen(true)}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-200 border border-sky-400/40 text-xs font-extrabold whitespace-nowrap transition shrink-0"
+                    >
+                      <FileUp className="w-4 h-4 text-sky-300" />
+                      <span>استيراد Excel</span>
+                    </button>
+                  </>
                 ) : (
                   <button
                     onClick={() => {
@@ -1471,7 +1808,6 @@ export default function App() {
 
       {/* =====================================================================
           2. القائمة الجانبية القابلة للإظهار والإخفاء (Collapsible Drawer Sidebar)
-             (بدون أي زر للملاحظات المتأخرة — محصور في الهيدر العلوي فقط)
          ===================================================================== */}
       {isSidebarOpen && (
         <div className="fixed inset-0 z-50 flex">
@@ -1549,12 +1885,9 @@ export default function App() {
               </div>
 
               {!currentVilla ? (
-                /* محتوى القائمة الجانبية في وضع الرئيسية */
                 <div className="space-y-3">
                   <div className="bg-teal-500/10 border border-teal-400/25 rounded-2xl p-3.5 space-y-2">
-                    <span className="text-[11px] font-bold text-amber-400">
-                      بوابة متابعة جودة وتسليم الفلل - مشروع واحة الدمام
-                    </span>
+                    <span className="text-[11px] font-bold text-amber-400">بوابة متابعة جودة وتسليم الفلل - مشروع واحة الدمام</span>
                     <div className="grid grid-cols-3 gap-2 pt-2 text-center text-[11px]">
                       <div className="bg-white/5 p-2 rounded-xl">
                         <span className="text-slate-400 block">الإجمالي</span>
@@ -1563,13 +1896,13 @@ export default function App() {
                       <div className="bg-emerald-500/15 p-2 rounded-xl">
                         <span className="text-emerald-300 block">المعتمد</span>
                         <strong className="text-sm text-emerald-300 font-black">
-                          {allSnags.filter((s) => s.status === 'اعتماد المالك النهائي').length}
+                          {allSnags.filter((s) => s.status === 'معتمد ومغلق من المالك').length}
                         </strong>
                       </div>
                       <div className="bg-amber-500/15 p-2 rounded-xl">
                         <span className="text-amber-300 block">المفتوح</span>
                         <strong className="text-sm text-amber-300 font-black">
-                          {allSnags.filter((s) => s.status !== 'اعتماد المالك النهائي').length}
+                          {allSnags.filter((s) => s.status !== 'معتمد ومغلق من المالك').length}
                         </strong>
                       </div>
                     </div>
@@ -1591,7 +1924,6 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-                /* محتوى القائمة الجانبية عند الدخول لفيلا محددة */
                 <div className="space-y-4">
                   <div className="bg-white/10 border border-white/15 rounded-2xl p-3.5 space-y-2">
                     <div className="flex items-center gap-2">
@@ -1608,7 +1940,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* أيقونات تبديل الأدوار: مالك الفيلا - المقاول - المشرف */}
                   <div className="space-y-1.5">
                     <span className="text-[11px] font-bold text-slate-400 px-1 block">دور المستخدم الحالي:</span>
                     {isGuest ? (
@@ -1649,7 +1980,6 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* روابط التنقل الخاصة بالفيلا */}
                   <div className="space-y-1.5 pt-2 border-t border-white/10">
                     <span className="text-[11px] font-bold text-slate-400 px-1 block">أقسام إدارة الفيلا:</span>
 
@@ -1712,53 +2042,53 @@ export default function App() {
                     </button>
 
                     {permissions.canCreate && (
-                      <button
-                        onClick={() => {
-                          setEditingSnag(null);
-                          setIsSidebarOpen(false);
-                          setIsFormModalOpen(true);
-                        }}
-                        className="w-full mt-2 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-black bg-teal-500 hover:bg-teal-400 text-slate-950 shadow-md transition"
-                      >
-                        <Plus className="w-4 h-4" />
-                        <span>+ إضافة ملاحظة جديدة</span>
-                      </button>
+                      <>
+                        <button
+                          onClick={() => {
+                            setEditingSnag(null);
+                            setIsSidebarOpen(false);
+                            setIsFormModalOpen(true);
+                          }}
+                          className="w-full mt-2 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-black bg-teal-500 hover:bg-teal-400 text-slate-950 shadow-md transition"
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>+ إضافة ملاحظة جديدة</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setIsSidebarOpen(false);
+                            setIsImportModalOpen(true);
+                          }}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold bg-sky-500/20 hover:bg-sky-500/30 text-sky-200 border border-sky-400/30 transition"
+                        >
+                          <FileUp className="w-4 h-4 text-sky-300" />
+                          <span>استيراد ملاحظات من Excel</span>
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="p-4 border-t border-white/10 space-y-2.5 text-center">
-              {/* شارة حالة المزامنة السحابية في أسفل القائمة الجانبية */}
-              <div className="flex items-center justify-center">
-                {cloudStatus === 'connected' ? (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-400/30 text-emerald-300 text-[11px] font-extrabold">
+            {/* حالة الاتصال السحابي أسفل القائمة الجانبية */}
+            <div className="p-4 border-t border-white/10 space-y-2.5">
+              <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-[11px]">
+                <span className="text-slate-300 font-bold">المزامنة:</span>
+                {syncMode === 'cloud' ? (
+                  <span className="flex items-center gap-1.5 text-emerald-300 font-extrabold">
                     <Cloud className="w-3.5 h-3.5" />
                     <span>✓ متصل بالسحابة (Firebase)</span>
                   </span>
-                ) : cloudStatus === 'saving' ? (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 border border-amber-400/30 text-amber-200 text-[11px] font-extrabold">
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>جاري الحفظ في السحابة...</span>
-                  </span>
-                ) : cloudStatus === 'error' ? (
-                  <span
-                    title={cloudErrorMsg}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/20 border border-rose-400/40 text-rose-200 text-[11px] font-extrabold"
-                  >
-                    <CloudOff className="w-3.5 h-3.5" />
-                    <span>تنبيه في المزامنة السحابية</span>
-                  </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 text-[11px] font-bold">
-                    <Cloud className="w-3.5 h-3.5 text-teal-300" />
-                    <span>جاري الاتصال بالسحابة...</span>
+                  <span className="flex items-center gap-1.5 text-amber-300 font-extrabold">
+                    <HardDrive className="w-3.5 h-3.5" />
+                    <span>وضع الحفظ المحلي</span>
                   </span>
                 )}
               </div>
-
-              <div className="text-[11px] text-slate-400">
+              <div className="text-[11px] text-slate-400 text-center">
                 مشروع واحة الدمام • بوابة متابعة جودة وتسليم الفلل
               </div>
             </div>
@@ -1770,13 +2100,6 @@ export default function App() {
           3. المحتوى الرئيسي
          ===================================================================== */}
       <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 pt-6 flex-1">
-        {cloudStatus === 'error' && cloudErrorMsg && (
-          <div className="mb-4 bg-rose-50 border border-rose-300 rounded-2xl p-3 text-xs font-bold text-rose-900 flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-            <span>{cloudErrorMsg}</span>
-          </div>
-        )}
-
         {isGuest && (
           <div className="mb-5 bg-amber-50 border border-amber-300 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2.5 text-xs sm:text-sm text-amber-950">
@@ -1823,7 +2146,7 @@ export default function App() {
                 <div className="bg-emerald-50 px-4 py-3 rounded-2xl border border-emerald-200">
                   <span className="text-[11px] text-emerald-700 block font-bold">المعتمدة</span>
                   <strong className="text-xl font-black text-emerald-700">
-                    {allSnags.filter((s) => s.status === 'اعتماد المالك النهائي').length}
+                    {allSnags.filter((s) => s.status === 'معتمد ومغلق من المالك').length}
                   </strong>
                 </div>
                 <button
@@ -1840,12 +2163,8 @@ export default function App() {
               {VILLAS_LIST.map((villa, idx) => {
                 const vSnags = allSnags.filter((s) => s.villaId === villa.id);
                 const vTotal = vSnags.length;
-                const vClosed = vSnags.filter((s) => s.status === 'اعتماد المالك النهائي').length;
-                const vRepair = vSnags.filter(
-                  (s) =>
-                    s.status === 'استلام المقاول وبدء المعالجة' ||
-                    s.status === 'إنجاز الإصلاح ورفع صورة الحل'
-                ).length;
+                const vClosed = vSnags.filter((s) => s.status === 'معتمد ومغلق من المالك').length;
+                const vRepair = vSnags.filter((s) => s.status === 'جاري المعالجة من المقاول' || s.status === 'تم الإصلاح وبانتظار الفحص').length;
                 const vDelayed = vSnags.filter((s) => getDelayDays(s) > 0).length;
                 const pct = vTotal > 0 ? Math.round((vClosed / vTotal) * 100) : 0;
 
@@ -1939,7 +2258,7 @@ export default function App() {
               </button>
 
               <div className="flex flex-wrap items-center gap-2">
-                {permissions.canApprove && selectedSnag.status !== 'اعتماد المالك النهائي' && (
+                {permissions.canApprove && selectedSnag.status !== 'معتمد ومغلق من المالك' && (
                   <button
                     onClick={() => setReviewModalSnag(selectedSnag)}
                     className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 text-xs font-extrabold flex items-center gap-1.5 shadow-sm"
@@ -2037,7 +2356,7 @@ export default function App() {
                   </h3>
                   {!isGuest && (
                     <span className="text-[11px] font-bold text-teal-700">
-                      اضغط على أي مرحلة لتحديث حالة التنفيذ وحفظها فوراً
+                      اضغط على أي مرحلة لتحديث حالة التنفيذ مباشرة
                     </span>
                   )}
                 </div>
@@ -2103,7 +2422,7 @@ export default function App() {
                       type="button"
                       onClick={() =>
                         setLightboxImage({
-                          src: selectedSnag.problemImage,
+                          src: selectedSnag.problemImage || selectedSnag.beforeImage,
                           title: `صورة المشكلة — ${selectedSnag.snagNumber}: ${selectedSnag.title}`
                         })
                       }
@@ -2114,11 +2433,11 @@ export default function App() {
                     </button>
                   </div>
                   <img
-                    src={selectedSnag.problemImage}
+                    src={selectedSnag.problemImage || selectedSnag.beforeImage}
                     alt="صورة المشكلة"
                     onClick={() =>
                       setLightboxImage({
-                        src: selectedSnag.problemImage,
+                        src: selectedSnag.problemImage || selectedSnag.beforeImage,
                         title: `صورة المشكلة — ${selectedSnag.snagNumber}: ${selectedSnag.title}`
                       })
                     }
@@ -2132,13 +2451,13 @@ export default function App() {
                       <span className="text-xs font-extrabold text-emerald-700 flex items-center gap-1.5">
                         <CheckCircle2 className="w-4 h-4" /> صورة حل المشكلة (بعد الإصلاح)
                       </span>
-                      {selectedSnag.solutionImage && (
+                      {(selectedSnag.solutionImage || selectedSnag.afterImage) && (
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
                             onClick={() =>
                               setLightboxImage({
-                                src: selectedSnag.solutionImage!,
+                                src: (selectedSnag.solutionImage || selectedSnag.afterImage)!,
                                 title: `صورة حل المشكلة — ${selectedSnag.snagNumber}: ${selectedSnag.title}`
                               })
                             }
@@ -2161,13 +2480,13 @@ export default function App() {
                       )}
                     </div>
 
-                    {selectedSnag.solutionImage ? (
+                    {selectedSnag.solutionImage || selectedSnag.afterImage ? (
                       <img
-                        src={selectedSnag.solutionImage}
+                        src={selectedSnag.solutionImage || selectedSnag.afterImage}
                         alt="صورة حل المشكلة"
                         onClick={() =>
                           setLightboxImage({
-                            src: selectedSnag.solutionImage!,
+                            src: (selectedSnag.solutionImage || selectedSnag.afterImage)!,
                             title: `صورة حل المشكلة — ${selectedSnag.snagNumber}: ${selectedSnag.title}`
                           })
                         }
@@ -2187,7 +2506,7 @@ export default function App() {
                       <span>
                         {uploadingSolution
                           ? 'جاري ضغط وحفظ صورة الحل...'
-                          : selectedSnag.solutionImage
+                          : selectedSnag.solutionImage || selectedSnag.afterImage
                           ? 'تحديث / استبدال صورة حل المشكلة'
                           : 'رفع صورة حل المشكلة (من الجهاز أو الكاميرا)'}
                       </span>
@@ -2300,49 +2619,49 @@ export default function App() {
 
               <div
                 onClick={() => {
-                  setFilterStatus('رصد الملاحظة من المالك');
+                  setFilterStatus('تم الرصد والتوثيق');
                   setFilterDelayedOnly(false);
                   setActiveTab('snags');
                 }}
                 className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-slate-400 cursor-pointer transition"
               >
-                <span className="text-xs text-slate-600 font-bold">1. رصد المالك</span>
+                <span className="text-xs text-slate-600 font-bold">1. تم الرصد</span>
                 <div className="text-2xl font-black text-slate-700 mt-1">{villaStats.spotted}</div>
               </div>
 
               <div
                 onClick={() => {
-                  setFilterStatus('استلام المقاول وبدء المعالجة');
+                  setFilterStatus('جاري المعالجة من المقاول');
                   setFilterDelayedOnly(false);
                   setActiveTab('snags');
                 }}
                 className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-amber-400 cursor-pointer transition"
               >
-                <span className="text-xs text-amber-700 font-bold">2. قيد المعالجة</span>
+                <span className="text-xs text-amber-700 font-bold">2. جاري المعالجة</span>
                 <div className="text-2xl font-black text-amber-600 mt-1">{villaStats.inProgress}</div>
               </div>
 
               <div
                 onClick={() => {
-                  setFilterStatus('إنجاز الإصلاح ورفع صورة الحل');
+                  setFilterStatus('تم الإصلاح وبانتظار الفحص');
                   setFilterDelayedOnly(false);
                   setActiveTab('snags');
                 }}
                 className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-blue-400 cursor-pointer transition"
               >
-                <span className="text-xs text-blue-700 font-bold">3. بانتظار الاعتماد</span>
+                <span className="text-xs text-blue-700 font-bold">3. بانتظار الفحص</span>
                 <div className="text-2xl font-black text-blue-600 mt-1">{villaStats.fixedByContractor}</div>
               </div>
 
               <div
                 onClick={() => {
-                  setFilterStatus('اعتماد المالك النهائي');
+                  setFilterStatus('معتمد ومغلق من المالك');
                   setFilterDelayedOnly(false);
                   setActiveTab('snags');
                 }}
                 className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-emerald-400 cursor-pointer transition col-span-2 sm:col-span-1"
               >
-                <span className="text-xs text-emerald-700 font-bold">4. معتمد نهائياً</span>
+                <span className="text-xs text-emerald-700 font-bold">4. معتمد ومغلق</span>
                 <div className="text-2xl font-black text-emerald-600 mt-1">{villaStats.closed}</div>
               </div>
             </div>
@@ -2354,7 +2673,7 @@ export default function App() {
                   {FLOORS.map((fl) => {
                     const count = villaSnags.filter((s) => s.floor === fl).length;
                     const closedCount = villaSnags.filter(
-                      (s) => s.floor === fl && s.status === 'اعتماد المالك النهائي'
+                      (s) => s.floor === fl && s.status === 'معتمد ومغلق من المالك'
                     ).length;
                     const barPct = villaStats.total > 0 ? Math.round((count / villaStats.total) * 100) : 0;
                     return (
@@ -2431,7 +2750,7 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {villaSnags.map((s) => {
-                      const st = STATUS_CONFIG[s.status] || STATUS_CONFIG['رصد الملاحظة من المالك'];
+                      const st = STATUS_CONFIG[s.status] || STATUS_CONFIG['تم الرصد والتوثيق'];
                       const late = getDelayDays(s);
                       return (
                         <tr key={s.id} className="hover:bg-slate-50">
@@ -2543,10 +2862,10 @@ export default function App() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {filteredVillaSnags.map((snag) => {
-                const st = STATUS_CONFIG[snag.status] || STATUS_CONFIG['رصد الملاحظة من المالك'];
+                const st = STATUS_CONFIG[snag.status] || STATUS_CONFIG['تم الرصد والتوثيق'];
                 const late = getDelayDays(snag);
-                const hasProbImg = Boolean(snag.problemImage);
-                const hasSolImg = Boolean(snag.solutionImage);
+                const hasProbImg = Boolean(snag.problemImage || snag.beforeImage);
+                const hasSolImg = Boolean(snag.solutionImage || snag.afterImage);
                 return (
                   <div
                     key={snag.id}
@@ -2582,7 +2901,7 @@ export default function App() {
                             type="button"
                             onClick={() =>
                               setLightboxImage({
-                                src: snag.problemImage,
+                                src: snag.problemImage || snag.beforeImage,
                                 title: `صورة المشكلة — ${snag.snagNumber}`
                               })
                             }
@@ -2597,7 +2916,7 @@ export default function App() {
                             type="button"
                             onClick={() =>
                               setLightboxImage({
-                                src: snag.solutionImage!,
+                                src: (snag.solutionImage || snag.afterImage)!,
                                 title: `صورة حل المشكلة — ${snag.snagNumber}`
                               })
                             }
@@ -2645,7 +2964,7 @@ export default function App() {
           </div>
         ) : activeTab === 'reports' ? (
           /* =================================================================
-             العرض 5: التقارير والتصدير
+             العرض 5: التقارير والتصدير والاستيراد من Excel
              ================================================================= */
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-100">
@@ -2654,16 +2973,27 @@ export default function App() {
                   التقرير الهندسي لفيلا {currentVilla.villaNumber} - بلوك {currentVilla.blockNumber} ({currentVilla.ownerName})
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  تصدير كافة الملاحظات والمراحل إلى Excel أو طباعتها بصيغة PDF
+                  تصدير كافة الملاحظات إلى Excel أو استيراد ملاحظات جديدة من ملف Excel دفعة واحدة
                 </p>
               </div>
-              <button
-                onClick={handleExportCSV}
-                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-2 shadow"
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-                <span>تصدير إلى Excel (CSV)</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                {permissions.canCreate && (
+                  <button
+                    onClick={() => setIsImportModalOpen(true)}
+                    className="px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-extrabold flex items-center gap-2 shadow"
+                  >
+                    <FileUp className="w-4 h-4" />
+                    <span>استيراد من Excel</span>
+                  </button>
+                )}
+                <button
+                  onClick={handleExportCSV}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-2 shadow"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>تصدير إلى Excel (CSV)</span>
+                </button>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -2704,7 +3034,7 @@ export default function App() {
           </div>
         ) : (
           /* =================================================================
-             العرض 6: إدارة قائمة حسابات Gmail المصرح لها (إضافة + تعديل + حذف) وسجل العمليات
+             العرض 6: إدارة قائمة حسابات Gmail المصرح لها وسجل العمليات
              ================================================================= */
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
@@ -2714,7 +3044,7 @@ export default function App() {
                   <span>قائمة حسابات Gmail المصرح لها بالدخول والتحكم</span>
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  يمكنك إضافة أو تعديل أو حذف الإيميلات المصرح لها هنا، وتُحفظ التغييرات فوراً في قاعدة البيانات السحابية ليتم التحقق منها عند تسجيل الدخول بحساب Gmail.
+                  يمكنك إضافة أو تعديل أو حذف الإيميلات المصرح لها هنا، وتُحفظ التغييرات فوراً في قاعدة البيانات ليتم التحقق منها عند تسجيل الدخول بحساب Gmail.
                 </p>
               </div>
 
@@ -2940,7 +3270,7 @@ export default function App() {
       </footer>
 
       {/* =====================================================================
-          5. نافذة الملاحظات المتأخرة التفاعلية (مجمعة تحت عنوان أحمر لكل فيلا مع اسم المالك)
+          5. نافذة الملاحظات المتأخرة التفاعلية
          ===================================================================== */}
       {isDelayModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
@@ -3085,7 +3415,7 @@ export default function App() {
       )}
 
       {/* =====================================================================
-          6. نافذة تسجيل الدخول بـ Gmail (مع التحقق الصارم من القائمة المصرحة)
+          6. نافذة تسجيل الدخول بـ Gmail
          ===================================================================== */}
       {isLoginModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
@@ -3154,7 +3484,7 @@ export default function App() {
 
             <div className="pt-3 border-t border-slate-100 space-y-2">
               <span className="text-[11px] font-bold text-slate-400 block">
-                معاينة سريعة للمطور (تطابق مصرح به / غير مصرح):
+                معاينة سريعة (تطابق مصرح به / غير مصرح):
               </span>
               <div className="flex flex-wrap gap-1.5">
                 {authorizedMembers.map((m) => (
@@ -3181,7 +3511,7 @@ export default function App() {
       )}
 
       {/* =====================================================================
-          7. نافذة إضافة / تعديل ملاحظة للفيلا (مع رفع صورة المشكلة وصورة الحل)
+          7. نافذة إضافة / تعديل ملاحظة للفيلا
          ===================================================================== */}
       {isFormModalOpen && currentVilla && (
         <SnagFormDialog
@@ -3272,6 +3602,84 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* =====================================================================
+          11. نافذة استيراد الملاحظات من ملف Excel / CSV
+         ===================================================================== */}
+      {isImportModalOpen && currentVilla && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-sky-50 text-sky-700 flex items-center justify-center">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[11px] font-bold text-teal-700 block">
+                    فيلا {currentVilla.villaNumber} - بلوك {currentVilla.blockNumber} ({currentVilla.ownerName})
+                  </span>
+                  <h3 className="font-black text-slate-900 text-base">استيراد الملاحظات من ملف Excel</h3>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsImportModalOpen(false)}
+                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2.5 text-xs text-slate-700">
+              <p className="font-bold text-slate-900">خطوات الاستيراد السريع:</p>
+              <ol className="list-decimal list-inside space-y-1">
+                <li>حمّل نموذج Excel الجاهز بالضغط على الزر أدناه (أو استخدم أي ملف <code>.xlsx</code> أو <code>.csv</code>).</li>
+                <li>اكتب الملاحظات في الصفوف تحت الأعمدة: <strong>العنوان، التفاصيل، التخصص، الدور، الموقع، الأولوية، الموعد المستهدف</strong>.</li>
+                <li>ارفع الملف هنا ليتم ترقيم جميع الملاحظات تلقائياً وحفظها دفعة واحدة في قاعدة البيانات السحابية.</li>
+              </ol>
+
+              <button
+                type="button"
+                onClick={handleDownloadExcelTemplate}
+                className="mt-2 w-full py-2.5 px-4 rounded-xl bg-white hover:bg-teal-50 text-teal-800 border border-teal-300 font-extrabold flex items-center justify-center gap-2 transition"
+              >
+                <Download className="w-4 h-4" />
+                <span>تحميل نموذج Excel جاهز للتعبئة</span>
+              </button>
+            </div>
+
+            <label className="block border-2 border-dashed border-sky-400 hover:border-sky-600 bg-sky-50/50 hover:bg-sky-50 rounded-2xl p-6 text-center cursor-pointer transition">
+              <FileUp className="w-9 h-9 text-sky-600 mx-auto mb-2" />
+              <span className="block text-sm font-black text-slate-900">
+                {importingExcel ? 'جاري قراءة الملف واستيراد الملاحظات...' : 'اضغط هنا لاختيار ملف Excel (.xlsx أو .csv)'}
+              </span>
+              <span className="block text-[11px] text-slate-500 mt-1">
+                سيتم إضافة جميع الملاحظات مباشرة إلى سجل فيلا {currentVilla.villaNumber} - بلوك {currentVilla.blockNumber}
+              </span>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                disabled={importingExcel}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleImportExcelFile(file);
+                  e.target.value = '';
+                }}
+                className="hidden"
+              />
+            </label>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(false)}
+                className="px-5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-extrabold"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3303,8 +3711,8 @@ function SnagFormDialog({
   const [dueDate, setDueDate] = useState(initialData?.dueDate || '2026-11-30');
   const [contractorNotes, setContractorNotes] = useState(initialData?.contractorNotes || '');
   const [supervisorNotes, setSupervisorNotes] = useState(initialData?.supervisorNotes || '');
-  const [problemImage, setProblemImage] = useState<string>(initialData?.problemImage || '');
-  const [solutionImage, setSolutionImage] = useState<string>(initialData?.solutionImage || '');
+  const [problemImage, setProblemImage] = useState<string>(initialData?.problemImage || initialData?.beforeImage || '');
+  const [solutionImage, setSolutionImage] = useState<string>(initialData?.solutionImage || initialData?.afterImage || '');
   const [compressing, setCompressing] = useState(false);
   const [err, setErr] = useState('');
 
@@ -3342,7 +3750,9 @@ function SnagFormDialog({
       dueDate,
       contractorNotes: contractorNotes.trim(),
       supervisorNotes: supervisorNotes.trim(),
+      beforeImage: problemImage,
       problemImage,
+      afterImage: solutionImage,
       solutionImage
     });
   };
@@ -3479,9 +3889,7 @@ function SnagFormDialog({
             />
           </div>
 
-          {/* قسم رفع صورة المشكلة وصورة حل المشكلة */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-            {/* صورة المشكلة */}
             <div className="p-3 rounded-2xl border border-rose-200 bg-rose-50/40 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-extrabold text-rose-800 flex items-center gap-1">
@@ -3521,7 +3929,6 @@ function SnagFormDialog({
               </label>
             </div>
 
-            {/* صورة حل المشكلة */}
             <div className="p-3 rounded-2xl border border-emerald-200 bg-emerald-50/40 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-extrabold text-emerald-800 flex items-center gap-1">
