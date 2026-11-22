@@ -523,10 +523,10 @@ export default function App() {
   const [newMemberRole] = useState<'owner' | 'contractor' | 'supervisor'>('owner');
   const [newMemberVilla, setNewMemberVilla] = useState<string>('v102-b9');
 
-  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
-  const [editMemberName, setEditMemberName] = useState<string>('');
-  const [editMemberEmail, setEditMemberEmail] = useState<string>('');
-  const [editMemberVilla, setEditMemberVilla] = useState<string>('v102-b9');
+  const [editingMemberVilla, setEditMemberVilla] = useState<string>('v102-b9');
+
+  const [unauthorizedMessage, setUnauthorizedMessage] = useState<string | null>(null);
+  const defaultAuthorizedEmail = 'aalbinalshaikh@gmail.com';
 
   const [allSnags, setAllSnags] = useState<SnagItem[]>(INITIAL_SEEDS_WITH_IDS);
   const [allAuditLogs, setAllAuditLogs] = useState<AuditLog[]>([]);
@@ -757,26 +757,32 @@ export default function App() {
   const matchedMember = useMemo(() => {
     const email = user?.email?.toLowerCase().trim();
     if (!email) return null;
-    const directMatch = authorizedMembers.find((m) => m.email.toLowerCase().trim() === email);
-    if (directMatch) return directMatch;
-    if (email.endsWith('@gmail.com')) {
+    if (email === defaultAuthorizedEmail.toLowerCase()) {
       return {
-        name: user?.displayName || email.split('@')[0],
+        name: user?.displayName || 'أحمد عبدالكريم آل بن الشيخ',
         email,
         role: 'owner' as const,
         villaId: 'all' as const
       };
     }
+    const directMatch = authorizedMembers.find((m) => m.email.toLowerCase().trim() === email);
+    if (directMatch) return directMatch;
     return null;
   }, [user, authorizedMembers]);
 
   useEffect(() => {
     if (matchedMember) {
       setCurrentRole(matchedMember.role);
+      setUnauthorizedMessage(null);
     } else {
       setCurrentRole('guest');
+      if (user && !user.isAnonymous && user.email) {
+        setUnauthorizedMessage('أنت غير مصرح بالدخول، راجع مسؤول التطبيق');
+      } else {
+        setUnauthorizedMessage(null);
+      }
     }
-  }, [matchedMember]);
+  }, [matchedMember, user]);
 
   const handleGoogleSignIn = async () => {
     if (!auth) {
@@ -788,12 +794,20 @@ export default function App() {
       provider.setCustomParameters({ prompt: 'select_account' });
       const result = await signInWithPopup(auth, provider);
       const email = result.user?.email?.toLowerCase().trim();
-      if (email && email.endsWith('@gmail.com')) {
+      const isAllowed =
+        email === defaultAuthorizedEmail.toLowerCase() ||
+        authorizedMembers.some((m) => m.email.toLowerCase().trim() === email);
+
+      if (email && isAllowed) {
         const displayName = result.user?.displayName || email.split('@')[0];
         setCurrentRole('owner');
-        showToast('success', `أهلاً بك ${displayName} (${email}) — تم تفعيل صلاحيات الإضافة والتعديل بنجاح!`);
+        setUnauthorizedMessage(null);
+        showToast('success', `أهلاً بك ${displayName} (${email}) — تم تفعيل صلاحيات التحكم الكامل بنجاح!`);
       } else {
-        showToast('error', `تم الدخول بحساب (${email}) كـ "ضيف للمشاهدة فقط" لعدم وجوده في قائمة الإخوة المصرح لهم.`);
+        setCurrentRole('guest');
+        const msg = 'أنت غير مصرح بالدخول، راجع مسؤول التطبيق';
+        setUnauthorizedMessage(msg);
+        showToast('error', msg);
       }
     } catch (err: any) {
       console.error('Google Sign-In Error:', err);
@@ -1490,6 +1504,23 @@ export default function App() {
         >
           {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5 text-emerald-300" /> : <AlertCircle className="w-5 h-5 text-rose-300" />}
           <span>{toast.message}</span>
+        </div>
+      )}
+
+      {unauthorizedMessage && (
+        <div className="bg-rose-950 text-white border-b border-rose-700 px-4 py-3">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs sm:text-sm font-extrabold">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-300 shrink-0" />
+              <span>{unauthorizedMessage}</span>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="px-3.5 py-1.5 rounded-xl bg-white text-rose-950 text-xs font-black hover:bg-rose-100 transition self-start sm:self-auto"
+            >
+              تسجيل الخروج والعودة لوضع الضيف
+            </button>
+          </div>
         </div>
       )}
 
