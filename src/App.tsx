@@ -576,31 +576,28 @@ export default function App() {
         const logsCol = fsMod.collection(fbDb, 'audit_logs');
 
         // تهيئة أولية فقط إذا كانت قاعدة البيانات السحابية فارغة تماماً (لا تمسح أي بيانات موجودة)
-        try {
-          const snapNotes = await fsMod.getDocs(notesCol);
-          if (snapNotes.empty) {
-            const batch = fsMod.writeBatch(fbDb);
-            INITIAL_SNAGS.forEach((item) => {
-              batch.set(fsMod.doc(fbDb, 'notes', item.id), item);
-            });
-            await batch.commit();
-          }
-
-          const snapAuthDoc = await fsMod.getDoc(authUsersDoc);
-          if (!snapAuthDoc.exists()) {
-            await fsMod.setDoc(authUsersDoc, {
-              members: INITIAL_AUTHORIZED_MEMBERS,
-              updatedAt: new Date().toISOString()
-            });
-          }
-        } catch (seedErr: any) {
-          if (seedErr?.code === 'permission-denied') {
-            setCloudStatus('error');
-            setCloudErrorMsg('قواعد Firestore تمنع الكتابة بدون تسجيل دخول Google');
-          }
+      try {
+        const snapNotes = await fsMod.getDocs(notesCol);
+        if (snapNotes.empty && fbAuth.currentUser) {
+          const batch = fsMod.writeBatch(fbDb);
+          INITIAL_SNAGS.forEach((item) => {
+            batch.set(fsMod.doc(fbDb, 'notes', item.id), item);
+          });
+          await batch.commit();
         }
 
-        // الاستماع اللحظي لمجموعة notes في Firestore
+        const snapAuthDoc = await fsMod.getDoc(authUsersDoc);
+        if (!snapAuthDoc.exists() && fbAuth.currentUser) {
+          await fsMod.setDoc(authUsersDoc, {
+            members: INITIAL_AUTHORIZED_MEMBERS,
+            updatedAt: new Date().toISOString()
+          });
+        }
+      } catch {
+        // تجاهل خطأ التهيئة الأولية للزائر غير المسجل
+      }
+
+      // الاستماع اللحظي لمجموعة notes في Firestore
         unsubNotes = fsMod.onSnapshot(
           notesCol,
           (snapshot: any) => {
