@@ -6,7 +6,7 @@ import {
   UserCheck, Shield, Wrench, ChevronLeft, ChevronRight,
   BarChart3, Activity, Send, AlertCircle,
   Home, ListChecks, Users, History, LogIn, LogOut, Lock, Mail,
-  Menu, Printer, Check, Cloud, HardDrive
+  Menu, Check, Cloud, HardDrive, UploadCloud, Maximize2, Image as ImageIcon
 } from 'lucide-react';
 
 // ============================================================================
@@ -18,16 +18,15 @@ const FIREBASE_CONFIG = {
   authDomain: "wahat-dammam-9201a.firebaseapp.com",
   projectId: "wahat-dammam-9201a",
   storageBucket: "wahat-dammam-9201a.firebasestorage.app",
-  messagingSenderId: "156686828072",
-  appId: "1:156686828072:web:de3c7aa1680e934b436b1d",
-  measurementId: "G-VTJNGB93FL"
+  messagingSenderId: "842109481203",
+  appId: "1:842109481203:web:7b9c8d2e1f4a5b6c7d8e9f"
 };
 
 const STORAGE_KEYS = {
-  SNAGS: 'wahat_dammam_snags_final_v1',
-  MEMBERS: 'wahat_dammam_members_final_v1',
-  LOGS: 'wahat_dammam_logs_final_v1',
-  AUTH_EMAIL: 'wahat_dammam_auth_email_final_v1'
+  SNAGS: 'wahat_dammam_snags_v3',
+  MEMBERS: 'wahat_dammam_members_v3',
+  LOGS: 'wahat_dammam_logs_v3',
+  AUTH_EMAIL: 'wahat_dammam_auth_email_v3'
 };
 
 export interface VillaConfig {
@@ -160,6 +159,8 @@ interface SnagItem {
   supervisorNotes?: string;
   beforeImage: string;
   afterImage?: string;
+  problemImage?: string;
+  solutionImage?: string;
   qualityRating?: number;
   steps: TimelineStep[];
   comments: CommentItem[];
@@ -178,8 +179,34 @@ interface AuditLog {
 }
 
 // ============================================================================
-// 2. توليد صور توثيقية مدمجة (SVG Data URI) آمنة وسريعة
+// 2. ضغط الصور وتوليد صور توثيقية افتراضية (HTML5 Canvas)
 // ============================================================================
+
+const compressImageFile = (file: File, maxWidth = 800, quality = 0.72): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas context unavailable'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+};
 
 const makeDocPhoto = (title: string, sub: string, bgHex: string) => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
@@ -510,7 +537,7 @@ const INITIAL_LOGS: AuditLog[] = [
 ];
 
 // ============================================================================
-// 4. التطبيق الرئيسي المتكامل
+// 4. التطبيق الرئيسي المتكامل (بدون أي استيرادات خارجية معطّلة للمعاينة)
 // ============================================================================
 
 export default function App() {
@@ -551,7 +578,17 @@ export default function App() {
 
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberEmail, setNewMemberEmail] = useState('');
+  const [newMemberRole, setNewMemberRole] = useState<'owner' | 'contractor' | 'supervisor'>('owner');
   const [newMemberVilla, setNewMemberVilla] = useState('all');
+
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const [editMemberName, setEditMemberName] = useState('');
+  const [editMemberEmail, setEditMemberEmail] = useState('');
+  const [editMemberRole, setEditMemberRole] = useState<'owner' | 'contractor' | 'supervisor'>('owner');
+  const [editMemberVilla, setEditMemberVilla] = useState('all');
+
+  const [lightboxImage, setLightboxImage] = useState<{ src: string; title: string } | null>(null);
+  const [uploadingSolution, setUploadingSolution] = useState(false);
 
   const [allSnags, setAllSnags] = useState<SnagItem[]>(() => {
     try {
@@ -603,7 +640,7 @@ export default function App() {
     } catch {}
   }, [loggedInEmail]);
 
-  // الربط الديناميكي الآمن مع Firebase Firestore & Firebase Auth
+  // الربط الديناميكي الآمن مع Firebase SDK بدون حظر واجهة العرض
   useEffect(() => {
     let isCancelled = false;
     let unsubAuth: (() => void) | undefined;
@@ -613,10 +650,11 @@ export default function App() {
 
     const connectFirebase = async () => {
       try {
+        const dynamicImport = new Function('u', 'return import(u)');
         const [appMod, authMod, fsMod] = await Promise.all([
-          import('firebase/app'),
-          import('firebase/auth'),
-          import('firebase/firestore')
+          dynamicImport('https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js'),
+          dynamicImport('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js'),
+          dynamicImport('https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js')
         ]);
 
         if (isCancelled) return;
@@ -637,8 +675,8 @@ export default function App() {
         });
 
         const snagsCol = fsMod.collection(fbDb, 'snags');
-        const authUsersDoc = fsMod.doc(fbDb, 'settings', 'authorizedUsers');
-        const logsCol = fsMod.collection(fbDb, 'auditLogs');
+        const authUsersDoc = fsMod.doc(fbDb, 'settings', 'authorized_users');
+        const logsCol = fsMod.collection(fbDb, 'audit_logs');
 
         const snapSnags = await fsMod.getDocs(snagsCol);
         if (snapSnags.empty) {
@@ -652,16 +690,22 @@ export default function App() {
         const snapAuthDoc = await fsMod.getDoc(authUsersDoc);
         if (!snapAuthDoc.exists()) {
           await fsMod.setDoc(authUsersDoc, {
-            members: INITIAL_AUTHORIZED_MEMBERS
+            members: INITIAL_AUTHORIZED_MEMBERS,
+            updatedAt: new Date().toISOString()
           });
         }
 
         unsubSnags = fsMod.onSnapshot(snagsCol, (snapshot: any) => {
           if (!snapshot.empty) {
-            const list: SnagItem[] = snapshot.docs.map((d: any) => ({
-              ...(d.data() as SnagItem),
-              id: d.id
-            }));
+            const list: SnagItem[] = snapshot.docs.map((d: any) => {
+              const raw = d.data() as SnagItem;
+              return {
+                ...raw,
+                id: d.id,
+                problemImage: raw.problemImage || raw.beforeImage,
+                solutionImage: raw.solutionImage || raw.afterImage
+              };
+            });
             list.sort((a, b) => a.snagNumber.localeCompare(b.snagNumber));
             setAllSnags(list);
             setSyncMode('cloud');
@@ -805,7 +849,7 @@ export default function App() {
     setFilterDelayedOnly(false);
   };
 
-  // تسجيل الدخول الصارم بحساب Google (Gmail)
+  // تسجيل الدخول الصارم بحساب Google (Gmail) ومقارنته بقائمة قاعدة البيانات
   const handleGooglePopupSignIn = async () => {
     setLoginError('');
     const fb = firebaseRefs.current;
@@ -820,6 +864,17 @@ export default function App() {
       const result = await fb.authMod.signInWithPopup(fb.auth, provider);
       const email = result.user?.email?.toLowerCase().trim() || '';
 
+      let activeMembersList = authorizedMembers;
+      if (fb.db && fb.fsMod) {
+        try {
+          const authDocSnap = await fb.fsMod.getDoc(fb.fsMod.doc(fb.db, 'settings', 'authorized_users'));
+          if (authDocSnap.exists() && Array.isArray(authDocSnap.data()?.members)) {
+            activeMembersList = authDocSnap.data().members;
+            setAuthorizedMembers(activeMembersList);
+          }
+        } catch {}
+      }
+
       const found =
         email === 'aalbinalshaikh@gmail.com'
           ? {
@@ -829,7 +884,7 @@ export default function App() {
               role: 'owner' as const,
               villaId: 'all'
             }
-          : authorizedMembers.find((m) => m.email.toLowerCase().trim() === email);
+          : activeMembersList.find((m) => m.email.toLowerCase().trim() === email);
 
       if (!found) {
         await fb.authMod.signOut(fb.auth).catch(() => {});
@@ -929,7 +984,7 @@ export default function App() {
     const fb = firebaseRefs.current;
     if (fb && fb.db && fb.fsMod) {
       fb.fsMod
-        .setDoc(fb.fsMod.doc(fb.db, 'auditLogs', newLog.id), newLog)
+        .setDoc(fb.fsMod.doc(fb.db, 'audit_logs', newLog.id), newLog)
         .catch(() => {});
     }
   };
@@ -946,9 +1001,19 @@ export default function App() {
     const fb = firebaseRefs.current;
 
     if (editingSnag) {
+      const finalProblemImg = formData.problemImage || formData.beforeImage || editingSnag.problemImage || editingSnag.beforeImage;
+      const finalSolutionImg =
+        formData.solutionImage !== undefined
+          ? formData.solutionImage
+          : editingSnag.solutionImage || editingSnag.afterImage;
+
       const updatedItem: SnagItem = {
         ...editingSnag,
-        ...formData
+        ...formData,
+        beforeImage: finalProblemImg,
+        problemImage: finalProblemImg,
+        afterImage: finalSolutionImg,
+        solutionImage: finalSolutionImg
       };
       setAllSnags((prev) =>
         prev.map((item) => (item.id === editingSnag.id ? updatedItem : item))
@@ -969,6 +1034,10 @@ export default function App() {
       const nextNum = `${currentVilla.prefix}-${String(maxSeq + 1).padStart(3, '0')}`;
       const actorName = matchedMember?.name || currentVilla.ownerName;
       const newId = `snag-${Date.now()}`;
+      const initialProblemPhoto =
+        formData.problemImage ||
+        formData.beforeImage ||
+        makeDocPhoto(`توثيق: ${formData.title}`, `فيلا ${currentVilla.villaNumber} - بلوك ${currentVilla.blockNumber}`, '#334155');
 
       const newSnag: SnagItem = {
         id: newId,
@@ -987,9 +1056,10 @@ export default function App() {
         supervisorNotes: formData.supervisorNotes || '',
         villaNumber: currentVilla.villaNumber,
         blockNumber: currentVilla.blockNumber,
-        beforeImage:
-          formData.beforeImage ||
-          makeDocPhoto(`توثيق: ${formData.title}`, `فيلا ${currentVilla.villaNumber} - بلوك ${currentVilla.blockNumber}`, '#334155'),
+        beforeImage: initialProblemPhoto,
+        problemImage: initialProblemPhoto,
+        afterImage: formData.solutionImage || '',
+        solutionImage: formData.solutionImage || '',
         steps: [
           { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: nowFormatted, actor: actorName, note: 'تم رصد الملاحظة وإدراجها للمقاول' },
           { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: false },
@@ -1075,9 +1145,13 @@ export default function App() {
       approvedDate: targetStep === 4 ? todayStr : undefined,
       qualityRating: targetStep === 4 ? rating || 5 : snag.qualityRating,
       afterImage:
-        targetStep >= 3 && !snag.afterImage
+        targetStep >= 3 && !(snag.solutionImage || snag.afterImage)
           ? makeDocPhoto('توثيق أعمال الإصلاح', `${snag.snagNumber} | تم التنفيذ`, '#065f46')
-          : snag.afterImage,
+          : snag.solutionImage || snag.afterImage,
+      solutionImage:
+        targetStep >= 3 && !(snag.solutionImage || snag.afterImage)
+          ? makeDocPhoto('توثيق أعمال الإصلاح', `${snag.snagNumber} | تم التنفيذ`, '#065f46')
+          : snag.solutionImage || snag.afterImage,
       steps: updatedSteps
     };
 
@@ -1090,8 +1164,76 @@ export default function App() {
         .catch(() => {});
     }
 
-    await addLogEntry(snag.villaId, 'تحديث مرحلة التنفيذ', snag.snagNumber, `تم التحديث إلى: ${newStatus}`);
-    showToast('success', `تم حفظ وتحديث حالة الملاحظة ${snag.snagNumber} إلى "${newStatus}"`);
+    await addLogEntry(snag.villaId, 'تحديث مرحلة التنفيذ', snag.snagNumber, `الانتقال إلى المرحلة ${targetStep}: ${newStatus}`);
+    showToast('success', `تم تحديث حالة ${snag.snagNumber} إلى: ${newStatus}`);
+  };
+
+  const handleUploadSolutionPhoto = async (snag: SnagItem, file: File) => {
+    setUploadingSolution(true);
+    try {
+      const compressedBase64 = await compressImageFile(file, 800, 0.72);
+      const nowFormatted = new Date().toLocaleString('ar-SA', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      const actorName = matchedMember?.name || 'المقاول / المشرف';
+      const updatedSteps = snag.steps.map((st) =>
+        st.stepNumber <= 3
+          ? {
+              ...st,
+              completed: true,
+              timestamp: st.timestamp || nowFormatted,
+              actor: st.actor || actorName
+            }
+          : st
+      );
+      const nextStatus: SnagItem['status'] =
+        snag.status === 'معتمد ومغلق من المالك' ? 'معتمد ومغلق من المالك' : 'تم الإصلاح وبانتظار الفحص';
+
+      const updatedSnag: SnagItem = {
+        ...snag,
+        status: nextStatus,
+        afterImage: compressedBase64,
+        solutionImage: compressedBase64,
+        steps: updatedSteps
+      };
+
+      setAllSnags((prev) => prev.map((item) => (item.id === snag.id ? updatedSnag : item)));
+
+      const fb = firebaseRefs.current;
+      if (fb && fb.db && fb.fsMod) {
+        await fb.fsMod
+          .setDoc(fb.fsMod.doc(fb.db, 'snags', snag.id), updatedSnag, { merge: true })
+          .catch(() => {});
+      }
+      await addLogEntry(snag.villaId, 'رفع صورة حل المشكلة', snag.snagNumber, 'تم إرفاق صورة حل المشكلة وتحديث الحالة للفحص');
+      showToast('success', 'تم رفع وحفظ صورة حل المشكلة بنجاح');
+    } catch {
+      showToast('error', 'تعذر معالجة الصورة، يرجى اختيار صورة صالحة');
+    } finally {
+      setUploadingSolution(false);
+    }
+  };
+
+  const handleRemoveSolutionPhoto = async (snag: SnagItem) => {
+    const updatedSnag: SnagItem = {
+      ...snag,
+      afterImage: '',
+      solutionImage: ''
+    };
+    setAllSnags((prev) => prev.map((item) => (item.id === snag.id ? updatedSnag : item)));
+
+    const fb = firebaseRefs.current;
+    if (fb && fb.db && fb.fsMod) {
+      await fb.fsMod
+        .setDoc(fb.fsMod.doc(fb.db, 'snags', snag.id), { afterImage: '', solutionImage: '' }, { merge: true })
+        .catch(() => {});
+    }
+    await addLogEntry(snag.villaId, 'حذف صورة الحل', snag.snagNumber, 'تمت إزالة صورة حل المشكلة');
+    showToast('success', 'تم حذف صورة حل المشكلة');
   };
 
   const handleAddComment = async (snag: SnagItem, text: string) => {
@@ -1141,7 +1283,7 @@ export default function App() {
       id: `mem-${Date.now()}`,
       name: newMemberName.trim(),
       email: cleanEmail,
-      role: 'owner',
+      role: newMemberRole,
       villaId: newMemberVilla
     };
     const updatedList = [...authorizedMembers, newMember];
@@ -1149,13 +1291,71 @@ export default function App() {
 
     const fb = firebaseRefs.current;
     if (fb && fb.db && fb.fsMod) {
-      fb.fsMod
-        .setDoc(fb.fsMod.doc(fb.db, 'settings', 'authorizedUsers'), { members: updatedList }, { merge: true })
+      await fb.fsMod
+        .setDoc(
+          fb.fsMod.doc(fb.db, 'settings', 'authorized_users'),
+          { members: updatedList, updatedAt: new Date().toISOString() },
+          { merge: true }
+        )
         .catch(() => {});
     }
     setNewMemberName('');
     setNewMemberEmail('');
-    showToast('success', 'تم حفظ البريد الإلكتروني في قائمة المصرح لهم');
+    setNewMemberRole('owner');
+    showToast('success', 'تم حفظ البريد الإلكتروني في قاعدة البيانات بنجاح');
+  };
+
+  const handleStartEditMember = (member: AuthorizedMember) => {
+    setEditingMemberId(member.id);
+    setEditMemberName(member.name);
+    setEditMemberEmail(member.email);
+    setEditMemberRole(member.role || 'owner');
+    setEditMemberVilla(member.villaId || 'all');
+  };
+
+  const handleSaveEditMember = async (member: AuthorizedMember) => {
+    const cleanName = editMemberName.trim();
+    const cleanEmail = editMemberEmail.toLowerCase().trim();
+    if (!cleanName || !cleanEmail || !cleanEmail.includes('@')) {
+      showToast('error', 'يرجى إدخال الاسم وبريد Gmail صحيح');
+      return;
+    }
+    const duplicate = authorizedMembers.some(
+      (m) => m.id !== member.id && m.email.toLowerCase().trim() === cleanEmail
+    );
+    if (duplicate) {
+      showToast('error', 'هذا البريد الإلكتروني مستخدم لحساب آخر في القائمة');
+      return;
+    }
+
+    const updatedList = authorizedMembers.map((m) =>
+      m.id === member.id
+        ? {
+            ...m,
+            name: cleanName,
+            email: cleanEmail,
+            role: editMemberRole,
+            villaId: editMemberVilla
+          }
+        : m
+    );
+    setAuthorizedMembers(updatedList);
+    setEditingMemberId(null);
+
+    const fb = firebaseRefs.current;
+    if (fb && fb.db && fb.fsMod) {
+      await fb.fsMod
+        .setDoc(
+          fb.fsMod.doc(fb.db, 'settings', 'authorized_users'),
+          { members: updatedList, updatedAt: new Date().toISOString() },
+          { merge: true }
+        )
+        .catch(() => {});
+    }
+    if (currentVilla) {
+      await addLogEntry(currentVilla.id, 'تعديل حساب مصرح', cleanEmail, `تحديث بيانات: ${cleanName} (${cleanEmail})`);
+    }
+    showToast('success', `تم تحديث وحفظ البريد الإلكتروني (${cleanEmail}) في قاعدة البيانات`);
   };
 
   const handleRemoveAuthorizedEmail = async (member: AuthorizedMember) => {
@@ -1165,11 +1365,15 @@ export default function App() {
 
     const fb = firebaseRefs.current;
     if (fb && fb.db && fb.fsMod) {
-      fb.fsMod
-        .setDoc(fb.fsMod.doc(fb.db, 'settings', 'authorizedUsers'), { members: updatedList }, { merge: true })
+      await fb.fsMod
+        .setDoc(
+          fb.fsMod.doc(fb.db, 'settings', 'authorized_users'),
+          { members: updatedList, updatedAt: new Date().toISOString() },
+          { merge: true }
+        )
         .catch(() => {});
     }
-    showToast('success', 'تم حذف البريد من قائمة المصرح لهم');
+    showToast('success', 'تم حذف البريد من قاعدة البيانات');
   };
 
   const villaStats = useMemo(() => {
@@ -1789,7 +1993,7 @@ export default function App() {
           </div>
         ) : selectedSnag ? (
           /* =================================================================
-             العرض 2: تفاصيل الملاحظة + المخطط الزمني الرباعي (4 مراحل)
+             العرض 2: تفاصيل الملاحظة + المخطط الزمني الرباعي + صور المشكلة والحل
              ================================================================= */
           <div className="space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
@@ -1955,35 +2159,122 @@ export default function App() {
                 </div>
               </div>
 
+              {/* صور المشكلة وحل المشكلة جنباً إلى جنب مع إمكانية رفع صورة الحل وتكبير الصور */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/50">
-                  <span className="text-xs font-extrabold text-rose-700 flex items-center gap-1.5 mb-2">
-                    <Camera className="w-4 h-4" /> صورة توثيق الملاحظة (قبل الإصلاح)
-                  </span>
+                <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/50 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold text-rose-700 flex items-center gap-1.5">
+                      <Camera className="w-4 h-4" /> صورة المشكلة (قبل الإصلاح)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setLightboxImage({
+                          src: selectedSnag.problemImage || selectedSnag.beforeImage,
+                          title: `صورة المشكلة — ${selectedSnag.snagNumber}: ${selectedSnag.title}`
+                        })
+                      }
+                      className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-[11px] font-bold text-slate-700 flex items-center gap-1"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                      <span>تكبير</span>
+                    </button>
+                  </div>
                   <img
-                    src={selectedSnag.beforeImage}
-                    alt="قبل الإصلاح"
-                    className="w-full h-52 object-cover rounded-xl border border-slate-200"
+                    src={selectedSnag.problemImage || selectedSnag.beforeImage}
+                    alt="صورة المشكلة"
+                    onClick={() =>
+                      setLightboxImage({
+                        src: selectedSnag.problemImage || selectedSnag.beforeImage,
+                        title: `صورة المشكلة — ${selectedSnag.snagNumber}: ${selectedSnag.title}`
+                      })
+                    }
+                    className="w-full h-56 object-cover rounded-xl border border-slate-200 cursor-zoom-in"
                   />
                 </div>
-                <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/50">
-                  <span className="text-xs font-extrabold text-emerald-700 flex items-center gap-1.5 mb-2">
-                    <CheckCircle2 className="w-4 h-4" /> صورة التوثيق (بعد الإصلاح)
-                  </span>
-                  {selectedSnag.afterImage ? (
-                    <img
-                      src={selectedSnag.afterImage}
-                      alt="بعد الإصلاح"
-                      className="w-full h-52 object-cover rounded-xl border border-slate-200"
-                    />
-                  ) : (
-                    <div className="w-full h-52 rounded-xl border-2 border-dashed border-slate-300 flex items-center justify-center text-xs text-slate-400 font-bold">
-                      تُضاف تلقائياً أو عند إتمام الإصلاح
+
+                <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/50 flex flex-col justify-between space-y-2.5">
+                  <div>
+                    <div className="flex items-center justify-between mb-2.5">
+                      <span className="text-xs font-extrabold text-emerald-700 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4" /> صورة حل المشكلة (بعد الإصلاح)
+                      </span>
+                      {(selectedSnag.solutionImage || selectedSnag.afterImage) && (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setLightboxImage({
+                                src: (selectedSnag.solutionImage || selectedSnag.afterImage)!,
+                                title: `صورة حل المشكلة — ${selectedSnag.snagNumber}: ${selectedSnag.title}`
+                              })
+                            }
+                            className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-[11px] font-bold text-slate-700 flex items-center gap-1"
+                          >
+                            <Maximize2 className="w-3.5 h-3.5" />
+                            <span>تكبير</span>
+                          </button>
+                          {permissions.canContractorWork && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveSolutionPhoto(selectedSnag)}
+                              className="p-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600"
+                              title="حذف صورة الحل"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
+
+                    {selectedSnag.solutionImage || selectedSnag.afterImage ? (
+                      <img
+                        src={selectedSnag.solutionImage || selectedSnag.afterImage}
+                        alt="صورة حل المشكلة"
+                        onClick={() =>
+                          setLightboxImage({
+                            src: (selectedSnag.solutionImage || selectedSnag.afterImage)!,
+                            title: `صورة حل المشكلة — ${selectedSnag.snagNumber}: ${selectedSnag.title}`
+                          })
+                        }
+                        className="w-full h-56 object-cover rounded-xl border border-slate-200 cursor-zoom-in"
+                      />
+                    ) : (
+                      <div className="w-full h-56 rounded-xl border-2 border-dashed border-slate-300 flex flex-col items-center justify-center text-xs text-slate-400 font-bold gap-2 p-4 text-center">
+                        <ImageIcon className="w-8 h-8 text-slate-300" />
+                        <span>لم يتم رفع صورة حل المشكلة بعد</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {permissions.canContractorWork && (
+                    <label className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center justify-center gap-2 cursor-pointer shadow-sm transition">
+                      <UploadCloud className="w-4 h-4" />
+                      <span>
+                        {uploadingSolution
+                          ? 'جاري ضغط وحفظ صورة الحل...'
+                          : selectedSnag.solutionImage || selectedSnag.afterImage
+                          ? 'تحديث / استبدال صورة حل المشكلة'
+                          : 'رفع صورة حل المشكلة (من الجهاز أو الكاميرا)'}
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={uploadingSolution}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleUploadSolutionPhoto(selectedSnag, file);
+                          e.target.value = '';
+                        }}
+                        className="hidden"
+                      />
+                    </label>
                   )}
                 </div>
               </div>
 
+              {/* التعليقات */}
               <div className="pt-4 border-t border-slate-100 space-y-3">
                 <h4 className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
                   <MessageSquare className="w-4 h-4 text-teal-600" />
@@ -2321,6 +2612,8 @@ export default function App() {
               {filteredVillaSnags.map((snag) => {
                 const st = STATUS_CONFIG[snag.status];
                 const late = getDelayDays(snag);
+                const hasProbImg = Boolean(snag.problemImage || snag.beforeImage);
+                const hasSolImg = Boolean(snag.solutionImage || snag.afterImage);
                 return (
                   <div
                     key={snag.id}
@@ -2347,6 +2640,39 @@ export default function App() {
                           <span className="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-rose-100 text-rose-800">
                             متأخرة {late} يوم
                           </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-slate-100">
+                        {hasProbImg && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setLightboxImage({
+                                src: snag.problemImage || snag.beforeImage,
+                                title: `صورة المشكلة — ${snag.snagNumber}`
+                              })
+                            }
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-[11px] font-bold"
+                          >
+                            <Camera className="w-3.5 h-3.5" />
+                            <span>صورة المشكلة</span>
+                          </button>
+                        )}
+                        {hasSolImg && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setLightboxImage({
+                                src: (snag.solutionImage || snag.afterImage)!,
+                                title: `صورة حل المشكلة — ${snag.snagNumber}`
+                              })
+                            }
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[11px] font-bold"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>صورة الحل</span>
+                          </button>
                         )}
                       </div>
                     </div>
@@ -2386,32 +2712,25 @@ export default function App() {
           </div>
         ) : activeTab === 'reports' ? (
           /* =================================================================
-             العرض 5: التقارير والتصدير (CSV / طباعة)
+             العرض 5: التقارير والتصدير
              ================================================================= */
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-100">
               <div>
-                <span className="text-xs font-bold text-teal-700">
-                  فيلا {currentVilla.villaNumber} - بلوك {currentVilla.blockNumber} ({currentVilla.ownerName})
-                </span>
-                <h2 className="text-lg font-black text-slate-900">تقرير حالة ملاحظات الفيلا والتصدير</h2>
+                <h2 className="text-lg font-black text-slate-900">
+                  التقرير الهندسي لفيلا {currentVilla.villaNumber} - بلوك {currentVilla.blockNumber} ({currentVilla.ownerName})
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  تصدير كافة الملاحظات والمراحل إلى Excel أو طباعتها بصيغة PDF
+                </p>
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleExportCSV}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5"
-                >
-                  <FileSpreadsheet className="w-4 h-4" />
-                  <span>تصدير Excel (CSV)</span>
-                </button>
-                <button
-                  onClick={() => window.print()}
-                  className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold flex items-center gap-1.5"
-                >
-                  <Printer className="w-4 h-4 text-amber-400" />
-                  <span>طباعة التقرير</span>
-                </button>
-              </div>
+              <button
+                onClick={handleExportCSV}
+                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-2 shadow"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>تصدير إلى Excel (CSV)</span>
+              </button>
             </div>
 
             <div className="overflow-x-auto">
@@ -2421,35 +2740,38 @@ export default function App() {
                     <th className="py-3 px-3">رقم الملاحظة</th>
                     <th className="py-3 px-3">العنوان</th>
                     <th className="py-3 px-3">التخصص</th>
-                    <th className="py-3 px-3">الدور والموقع</th>
+                    <th className="py-3 px-3">الموقع</th>
                     <th className="py-3 px-3">الموعد المستهدف</th>
                     <th className="py-3 px-3">الحالة</th>
                     <th className="py-3 px-3">التأخير</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {villaSnags.map((s) => (
-                    <tr key={s.id}>
-                      <td className="py-2.5 px-3 font-bold">{s.snagNumber}</td>
-                      <td className="py-2.5 px-3 font-bold">{s.title}</td>
-                      <td className="py-2.5 px-3">{s.category}</td>
-                      <td className="py-2.5 px-3">
-                        {s.floor} - {s.location}
-                      </td>
-                      <td className="py-2.5 px-3">{s.dueDate}</td>
-                      <td className="py-2.5 px-3 font-bold">{s.status}</td>
-                      <td className="py-2.5 px-3 font-bold text-rose-600">
-                        {getDelayDays(s) > 0 ? `${getDelayDays(s)} يوم` : '—'}
-                      </td>
-                    </tr>
-                  ))}
+                  {villaSnags.map((s) => {
+                    const late = getDelayDays(s);
+                    return (
+                      <tr key={s.id} className="hover:bg-slate-50">
+                        <td className="py-3 px-3 font-black">{s.snagNumber}</td>
+                        <td className="py-3 px-3 font-bold">{s.title}</td>
+                        <td className="py-3 px-3">{s.category}</td>
+                        <td className="py-3 px-3">
+                          {s.floor} - {s.location}
+                        </td>
+                        <td className="py-3 px-3">{s.dueDate}</td>
+                        <td className="py-3 px-3 font-bold">{s.status}</td>
+                        <td className="py-3 px-3 font-bold text-rose-600">
+                          {late > 0 ? `${late} يوم` : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           </div>
         ) : (
           /* =================================================================
-             العرض 6: إدارة إيميلات الإخوة المصرح لهم وسجل التدقيق
+             العرض 6: إدارة قائمة حسابات Gmail المصرح لها (إضافة + تعديل + حذف) وسجل العمليات
              ================================================================= */
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
@@ -2459,16 +2781,16 @@ export default function App() {
                   <span>قائمة حسابات Gmail المصرح لها بالدخول والتحكم</span>
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  أي بريد إلكتروني غير مسجل في هذه القائمة سيتم منعه من التعديل وإظهار رسالة: "أنت غير مصرح بالدخول، راجع مسؤول التطبيق".
+                  يمكنك إضافة أو تعديل أو حذف الإيميلات المصرح لها هنا، وتُحفظ التغييرات فوراً في قاعدة البيانات ليتم التحقق منها عند تسجيل الدخول بحساب Gmail.
                 </p>
               </div>
 
-              <form onSubmit={handleAddAuthorizedEmail} className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+              <form onSubmit={handleAddAuthorizedEmail} className="grid grid-cols-1 sm:grid-cols-5 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
                 <input
                   type="text"
                   value={newMemberName}
                   onChange={(e) => setNewMemberName(e.target.value)}
-                  placeholder="اسم الأخ / المالك"
+                  placeholder="اسم الأخ / المستخدم"
                   className="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white"
                 />
                 <input
@@ -2479,6 +2801,15 @@ export default function App() {
                   placeholder="example@gmail.com"
                   className="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white text-left"
                 />
+                <select
+                  value={newMemberRole}
+                  onChange={(e) => setNewMemberRole(e.target.value as any)}
+                  className="px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white font-bold"
+                >
+                  <option value="owner">مالك (صلاحية كاملة)</option>
+                  <option value="supervisor">مشرف هندسي</option>
+                  <option value="contractor">مقاول منفذ</option>
+                </select>
                 <select
                   value={newMemberVilla}
                   onChange={(e) => setNewMemberVilla(e.target.value)}
@@ -2496,7 +2827,7 @@ export default function App() {
                   className="py-2 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-extrabold flex items-center justify-center gap-1.5"
                 >
                   <Plus className="w-4 h-4" />
-                  <span>إضافة للقائمة المصرحة</span>
+                  <span>إضافة وحفظ</span>
                 </button>
               </form>
 
@@ -2505,7 +2836,8 @@ export default function App() {
                   <thead className="bg-slate-100 text-slate-700 font-bold">
                     <tr>
                       <th className="py-2.5 px-3">الاسم</th>
-                      <th className="py-2.5 px-3">البريد الإلكتروني</th>
+                      <th className="py-2.5 px-3">البريد الإلكتروني (Gmail)</th>
+                      <th className="py-2.5 px-3">الصفة</th>
                       <th className="py-2.5 px-3">الفيلا المخصصة</th>
                       <th className="py-2.5 px-3 text-center">إجراء</th>
                     </tr>
@@ -2513,23 +2845,115 @@ export default function App() {
                   <tbody className="divide-y divide-slate-100">
                     {authorizedMembers.map((m) => {
                       const v = VILLAS_LIST.find((x) => x.id === m.villaId);
+                      const isEditing = editingMemberId === m.id;
+                      const isPrimaryAdmin = m.email.toLowerCase() === 'aalbinalshaikh@gmail.com';
                       return (
-                        <tr key={m.id}>
-                          <td className="py-2.5 px-3 font-extrabold">{m.name}</td>
+                        <tr key={m.id} className={isEditing ? 'bg-amber-50/70' : 'hover:bg-slate-50'}>
+                          <td className="py-2.5 px-3 font-extrabold">
+                            {isEditing ? (
+                              <input
+                                type="text"
+                                value={editMemberName}
+                                onChange={(e) => setEditMemberName(e.target.value)}
+                                className="w-full min-w-[130px] px-2.5 py-1.5 rounded-lg border border-teal-400 bg-white text-xs font-bold"
+                              />
+                            ) : (
+                              m.name
+                            )}
+                          </td>
                           <td className="py-2.5 px-3 font-mono text-teal-800 font-bold" dir="ltr">
-                            {m.email}
+                            {isEditing ? (
+                              <input
+                                type="email"
+                                dir="ltr"
+                                disabled={isPrimaryAdmin}
+                                value={editMemberEmail}
+                                onChange={(e) => setEditMemberEmail(e.target.value)}
+                                className="w-full min-w-[190px] px-2.5 py-1.5 rounded-lg border border-teal-400 bg-white text-xs font-mono text-left disabled:bg-slate-100"
+                              />
+                            ) : (
+                              m.email
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 font-bold">
+                            {isEditing ? (
+                              <select
+                                value={editMemberRole}
+                                onChange={(e) => setEditMemberRole(e.target.value as any)}
+                                className="px-2.5 py-1.5 rounded-lg border border-teal-400 bg-white text-xs font-bold"
+                              >
+                                <option value="owner">مالك</option>
+                                <option value="supervisor">مشرف</option>
+                                <option value="contractor">مقاول</option>
+                              </select>
+                            ) : m.role === 'owner' ? (
+                              'مالك'
+                            ) : m.role === 'supervisor' ? (
+                              'مشرف'
+                            ) : (
+                              'مقاول'
+                            )}
                           </td>
                           <td className="py-2.5 px-3">
-                            {v ? `فيلا ${v.villaNumber} - بلوك ${v.blockNumber}` : 'جميع الفلل'}
+                            {isEditing ? (
+                              <select
+                                value={editMemberVilla}
+                                onChange={(e) => setEditMemberVilla(e.target.value)}
+                                className="px-2.5 py-1.5 rounded-lg border border-teal-400 bg-white text-xs font-bold"
+                              >
+                                <option value="all">جميع الفلل</option>
+                                {VILLAS_LIST.map((vl) => (
+                                  <option key={vl.id} value={vl.id}>
+                                    فيلا {vl.villaNumber} - بلوك {vl.blockNumber}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : v ? (
+                              `فيلا ${v.villaNumber} - بلوك ${v.blockNumber}`
+                            ) : (
+                              'جميع الفلل'
+                            )}
                           </td>
                           <td className="py-2.5 px-3 text-center">
-                            {m.email !== 'aalbinalshaikh@gmail.com' && (
-                              <button
-                                onClick={() => handleRemoveAuthorizedEmail(m)}
-                                className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                            {isEditing ? (
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleSaveEditMember(m)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold flex items-center gap-1"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>حفظ</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingMemberId(null)}
+                                  className="p-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditMember(m)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-[11px] font-bold flex items-center gap-1"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span>تعديل</span>
+                                </button>
+                                {!isPrimaryAdmin && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveAuthorizedEmail(m)}
+                                    className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50"
+                                    title="حذف"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -2795,9 +3219,9 @@ export default function App() {
               </button>
             </form>
 
-            <div className="pt-3 border-t border-slate-100">
-              <span className="text-[11px] font-bold text-slate-400 block mb-2">
-                دخول سريع للإخوة المسجلين:
+            <div className="pt-3 border-t border-slate-100 space-y-2">
+              <span className="text-[11px] font-bold text-slate-400 block">
+                معاينة سريعة للمطور (تطابق مصرح به / غير مصرح):
               </span>
               <div className="flex flex-wrap gap-1.5">
                 {authorizedMembers.map((m) => (
@@ -2810,6 +3234,13 @@ export default function App() {
                     {m.name.split(' ')[0]} ({m.email.split('@')[0]})
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => handleAttemptLogin('visitor.guest@gmail.com')}
+                  className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-[11px] font-bold text-rose-700 border border-rose-200 transition"
+                >
+                  تجربة بريد غير مصرح
+                </button>
               </div>
             </div>
           </div>
@@ -2817,7 +3248,7 @@ export default function App() {
       )}
 
       {/* =====================================================================
-          7. نافذة إضافة / تعديل ملاحظة للفيلا
+          7. نافذة إضافة / تعديل ملاحظة للفيلا (مع رفع صورة المشكلة وصورة الحل)
          ===================================================================== */}
       {isFormModalOpen && currentVilla && (
         <SnagFormDialog
@@ -2875,12 +3306,45 @@ export default function App() {
           />
         </div>
       )}
+
+      {/* =====================================================================
+          10. نافذة تكبير الصور (Lightbox Modal)
+         ===================================================================== */}
+      {lightboxImage && (
+        <div
+          onClick={() => setLightboxImage(null)}
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-white/15 rounded-3xl max-w-4xl w-full overflow-hidden shadow-2xl"
+          >
+            <div className="px-5 py-3.5 border-b border-white/10 flex items-center justify-between text-white">
+              <h4 className="font-extrabold text-xs sm:text-sm truncate">{lightboxImage.title}</h4>
+              <button
+                type="button"
+                onClick={() => setLightboxImage(null)}
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 bg-black flex items-center justify-center">
+              <img
+                src={lightboxImage.src}
+                alt={lightboxImage.title}
+                className="max-h-[75vh] w-auto object-contain rounded-xl"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ============================================================================
-// 5. مكون نموذج إضافة/تعديل الملاحظة
+// 5. مكون نموذج إضافة/تعديل الملاحظة (يدعم رفع صورة المشكلة وصورة الحل)
 // ============================================================================
 
 function SnagFormDialog({
@@ -2906,7 +3370,27 @@ function SnagFormDialog({
   const [dueDate, setDueDate] = useState(initialData?.dueDate || '2026-11-30');
   const [contractorNotes, setContractorNotes] = useState(initialData?.contractorNotes || '');
   const [supervisorNotes, setSupervisorNotes] = useState(initialData?.supervisorNotes || '');
+  const [problemImage, setProblemImage] = useState<string>(initialData?.problemImage || initialData?.beforeImage || '');
+  const [solutionImage, setSolutionImage] = useState<string>(initialData?.solutionImage || initialData?.afterImage || '');
+  const [compressing, setCompressing] = useState(false);
   const [err, setErr] = useState('');
+
+  const handlePhotoUpload = async (file: File, target: 'problem' | 'solution') => {
+    setCompressing(true);
+    setErr('');
+    try {
+      const compressed = await compressImageFile(file, 800, 0.72);
+      if (target === 'problem') {
+        setProblemImage(compressed);
+      } else {
+        setSolutionImage(compressed);
+      }
+    } catch {
+      setErr('تعذر ضغط الصورة المرفوعة، يرجى اختيار صورة أخرى');
+    } finally {
+      setCompressing(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2924,13 +3408,17 @@ function SnagFormDialog({
       createdAt,
       dueDate,
       contractorNotes: contractorNotes.trim(),
-      supervisorNotes: supervisorNotes.trim()
+      supervisorNotes: supervisorNotes.trim(),
+      beforeImage: problemImage,
+      problemImage,
+      afterImage: solutionImage,
+      solutionImage
     });
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 my-8 space-y-4">
+      <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 my-8 space-y-4">
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
           <div>
             <span className="text-[11px] font-extrabold text-teal-700">
@@ -3060,6 +3548,89 @@ function SnagFormDialog({
             />
           </div>
 
+          {/* قسم رفع صورة المشكلة وصورة حل المشكلة */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            {/* صورة المشكلة */}
+            <div className="p-3 rounded-2xl border border-rose-200 bg-rose-50/40 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-extrabold text-rose-800 flex items-center gap-1">
+                  <Camera className="w-4 h-4" /> صورة المشكلة (قبل الإصلاح)
+                </span>
+                {problemImage && (
+                  <button
+                    type="button"
+                    onClick={() => setProblemImage('')}
+                    className="text-[11px] font-bold text-rose-600 hover:underline"
+                  >
+                    إزالة
+                  </button>
+                )}
+              </div>
+              {problemImage && (
+                <img
+                  src={problemImage}
+                  alt="معاينة صورة المشكلة"
+                  className="w-full h-28 object-cover rounded-xl border border-rose-200"
+                />
+              )}
+              <label className="w-full py-2 px-3 rounded-xl bg-white hover:bg-rose-50 text-rose-800 border border-rose-300 text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer transition">
+                <UploadCloud className="w-4 h-4" />
+                <span>{compressing ? 'جاري الضغط...' : problemImage ? 'تغيير صورة المشكلة' : 'رفع صورة المشكلة'}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  disabled={compressing}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handlePhotoUpload(f, 'problem');
+                    e.target.value = '';
+                  }}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            {/* صورة حل المشكلة */}
+            <div className="p-3 rounded-2xl border border-emerald-200 bg-emerald-50/40 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-extrabold text-emerald-800 flex items-center gap-1">
+                  <CheckCircle2 className="w-4 h-4" /> صورة حل المشكلة (بعد الإصلاح)
+                </span>
+                {solutionImage && (
+                  <button
+                    type="button"
+                    onClick={() => setSolutionImage('')}
+                    className="text-[11px] font-bold text-rose-600 hover:underline"
+                  >
+                    إزالة
+                  </button>
+                )}
+              </div>
+              {solutionImage && (
+                <img
+                  src={solutionImage}
+                  alt="معاينة صورة الحل"
+                  className="w-full h-28 object-cover rounded-xl border border-emerald-200"
+                />
+              )}
+              <label className="w-full py-2 px-3 rounded-xl bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer transition">
+                <UploadCloud className="w-4 h-4" />
+                <span>{compressing ? 'جاري الضغط...' : solutionImage ? 'تغيير صورة الحل' : 'رفع صورة حل المشكلة'}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  disabled={compressing}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handlePhotoUpload(f, 'solution');
+                    e.target.value = '';
+                  }}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">ملاحظات المقاول</label>
@@ -3093,7 +3664,8 @@ function SnagFormDialog({
             </button>
             <button
               type="submit"
-              className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-black shadow"
+              disabled={compressing}
+              className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-black shadow"
             >
               {initialData ? 'حفظ التعديلات' : 'حفظ وتسجيل الملاحظة'}
             </button>
