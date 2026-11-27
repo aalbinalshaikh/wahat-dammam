@@ -7,7 +7,7 @@ import {
   BarChart3, Activity, Send, AlertCircle,
   Home, ListChecks, Users, History, LogIn, LogOut, Lock, Mail,
   Menu, Check, Cloud, HardDrive, UploadCloud, Maximize2, Image as ImageIcon,
-  Download, FileUp
+  Download, FileUp, LayoutGrid, List, CalendarPlus
 } from 'lucide-react';
 
 // ============================================================================
@@ -180,7 +180,7 @@ interface AuditLog {
 }
 
 // ============================================================================
-// 2. ضغط الصور وتوليد صور توثيقية نظيفة وخالية من قيم undefined لـ Firestore
+// 2. دوال مساعدة نظيفة (تنظيف البيانات، ضغط الصور، تحليل CSV)
 // ============================================================================
 
 const sanitizeForFirestore = (obj: any): any => {
@@ -198,6 +198,34 @@ const sanitizeForFirestore = (obj: any): any => {
     return cleanObj;
   }
   return obj;
+};
+
+const parseCSVLines = (text: string): string[][] => {
+  const cleanText = text.replace(/^\uFEFF/, '');
+  const lines = cleanText.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  return lines.map((line) => {
+    const result: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  });
 };
 
 const compressImageFile = (file: File, maxWidth = 800, quality = 0.72): Promise<string> => {
@@ -555,7 +583,7 @@ const INITIAL_LOGS: AuditLog[] = [
 ];
 
 // ============================================================================
-// 4. التطبيق الرئيسي المتكامل (كامل ومستقر بدون أي استيرادات معطّلة للمعاينة)
+// 4. التطبيق الرئيسي المتكامل
 // ============================================================================
 
 export default function App() {
@@ -670,9 +698,11 @@ export default function App() {
   const [filterStatus, setFilterStatus] = useState('الكل');
   const [filterCategory, setFilterCategory] = useState('الكل');
   const [filterDelayedOnly, setFilterDelayedOnly] = useState(false);
+  const [snagsViewMode, setSnagsViewMode] = useState<'grid' | 'list'>('grid');
 
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [editingSnag, setEditingSnag] = useState<SnagItem | null>(null);
+  const [quickSnagTitle, setQuickSnagTitle] = useState('');
   const [deleteConfirmSnag, setDeleteConfirmSnag] = useState<SnagItem | null>(null);
   const [reviewModalSnag, setReviewModalSnag] = useState<SnagItem | null>(null);
   const [isDelayModalOpen, setIsDelayModalOpen] = useState(false);
@@ -685,7 +715,6 @@ export default function App() {
     setTimeout(() => setToast(null), 4500);
   };
 
-  // الربط الديناميكي الآمن مع Firebase SDK في الخلفية
   useEffect(() => {
     let isCancelled = false;
     let unsubAuth: (() => void) | undefined;
@@ -1100,21 +1129,72 @@ export default function App() {
     setEditingSnag(null);
   };
 
-  const handleDeleteSnag = async () => {
-    if (!deleteConfirmSnag) return;
-    const targetToDelete = deleteConfirmSnag;
-    setAllSnags((prev) => prev.filter((s) => s.id !== targetToDelete.id));
-    if (selectedSnagId === targetToDelete.id) setSelectedSnagId(null);
-    setDeleteConfirmSnag(null);
-
-    const fb = firebaseRefs.current;
-    if (fb && fb.db && fb.fsMod) {
-      fb.fsMod
-        .deleteDoc(fb.fsMod.doc(fb.db, 'notes', targetToDelete.id))
-        .catch(() => {});
+  const handleQuickAddSnag = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentVilla) return;
+    if (!quickSnagTitle.trim()) {
+      showToast('error', 'يرجى إدخال عنوان الملاحظة *');
+      return;
     }
-    await addLogEntry(targetToDelete.villaId, 'حذف ملاحظة', targetToDelete.snagNumber, `تم حذف: ${targetToDelete.title}`);
-    showToast('success', `تم حذف الملاحظة ${targetToDelete.snagNumber} نهائياً`);
+
+    const nowFormatted = new Date().toLocaleString('ar-SA', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const maxSeq = villaSnags.reduce((max, item) => {
+      const m = item.snagNumber.match(/-(\d+)$/);
+      const n = m ? parseInt(m[1], 10) : 0;
+      return n > max ? n : max;
+    }, 0);
+    const nextNum = `${currentVilla.prefix}-${String(maxSeq + 1).padStart(3, '0')}`;
+    const actorName = matchedMember?.name || currentVilla.ownerName;
+    const cleanTitle = quickSnagTitle.trim();
+    const initialProblemPhoto = makeDocPhoto(
+      `توثيق: ${cleanTitle}`,
+      `فيلا ${currentVilla.villaNumber} - بلوك ${currentVilla.blockNumber}`,
+      '#334155'
+    );
+
+    const newSnag: SnagItem = {
+      id: nextNum,
+      villaId: currentVilla.id,
+      snagNumber: nextNum,
+      title: cleanTitle,
+      description: cleanTitle,
+      category: CATEGORIES[0],
+      floor: FLOORS[0],
+      location: LOCATIONS_BY_FLOOR[FLOORS[0]][0],
+      status: 'تم الرصد والتوثيق',
+      priority: 'متوسطة',
+      createdAt: todayStr,
+      dueDate: '2026-11-30',
+      contractorNotes: '',
+      supervisorNotes: '',
+      villaNumber: currentVilla.villaNumber,
+      blockNumber: currentVilla.blockNumber,
+      beforeImage: initialProblemPhoto,
+      problemImage: initialProblemPhoto,
+      afterImage: '',
+      solutionImage: '',
+      steps: [
+        { stepNumber: 1, title: 'تم الرصد والتوثيق', completed: true, timestamp: nowFormatted, actor: actorName, note: 'إضافة ملاحظة سريعة' },
+        { stepNumber: 2, title: 'جاري المعالجة من المقاول', completed: false },
+        { stepNumber: 3, title: 'تم الإصلاح وبانتظار الفحص', completed: false },
+        { stepNumber: 4, title: 'معتمد ومغلق من المالك', completed: false }
+      ],
+      comments: []
+    };
+
+    setAllSnags((prev) => [newSnag, ...prev]);
+    await persistSnagToCloud(newSnag);
+    await addLogEntry(currentVilla.id, 'إضافة ملاحظة سريعة', nextNum, `إضافة سريعة: ${cleanTitle}`);
+    setQuickSnagTitle('');
+    setIsSidebarOpen(false);
+    showToast('success', `تم حفظ الملاحظة السريعة (${nextNum}) في فيلا ${currentVilla.villaNumber}`);
   };
 
   const handleAdvanceStep = async (snag: SnagItem, targetStep: number, noteText?: string, rating?: number) => {
@@ -1475,41 +1555,43 @@ export default function App() {
     showToast('success', 'تم تحميل نموذج Excel الجاهز للتعبئة');
   };
 
-  const parseCSVLines = (text: string): string[][] => {
-    const cleanText = text.replace(/^\uFEFF/, '').trim();
-    const firstLine = cleanText.split(/\r?\n/)[0] || '';
-    const delimiter = firstLine.includes(';') && !firstLine.includes(',') ? ';' : ',';
-    const rows: string[][] = [];
-    let currentRow: string[] = [];
-    let currentVal = '';
-    let inQuotes = false;
+  const handleAddToCalendar = (snag: SnagItem) => {
+    const cleanDate = (snag.dueDate || todayStr).replace(/-/g, '');
+    const titleText = `[${snag.snagNumber}] ${snag.title} - فيلا ${snag.villaNumber} بلوك ${snag.blockNumber}`;
+    const detailsText = `التخصص: ${snag.category} | الدور: ${snag.floor} - ${snag.location}\nالحالة: ${snag.status}\nالتفاصيل: ${snag.description}`;
+    const locationText = `مشروع واحة الدمام - فيلا ${snag.villaNumber} بلوك ${snag.blockNumber} (${snag.floor} - ${snag.location})`;
 
-    for (let i = 0; i < cleanText.length; i++) {
-      const char = cleanText[i];
-      const nextChar = cleanText[i + 1];
-      if (char === '"') {
-        if (inQuotes && nextChar === '"') {
-          currentVal += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-      } else if (char === delimiter && !inQuotes) {
-        currentRow.push(currentVal.trim());
-        currentVal = '';
-      } else if ((char === '\n' || (char === '\r' && nextChar === '\n')) && !inQuotes) {
-        if (char === '\r') i++;
-        currentRow.push(currentVal.trim());
-        if (currentRow.some((cell) => cell !== '')) rows.push(currentRow);
-        currentRow = [];
-        currentVal = '';
-      } else {
-        currentVal += char;
-      }
-    }
-    currentRow.push(currentVal.trim());
-    if (currentRow.some((cell) => cell !== '')) rows.push(currentRow);
-    return rows;
+    const icsLines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Wahat Dammam//Snag Tracker//AR',
+      'BEGIN:VEVENT',
+      `UID:${snag.id}-${Date.now()}@wahat-dammam`,
+      `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`,
+      `DTSTART;VALUE=DATE:${cleanDate}`,
+      `DTEND;VALUE=DATE:${cleanDate}`,
+      `SUMMARY:${titleText.replace(/\n/g, ' ')}`,
+      `DESCRIPTION:${detailsText.replace(/\n/g, '\\n')}`,
+      `LOCATION:${locationText}`,
+      'END:VEVENT',
+      'END:VCALENDAR'
+    ].join('\r\n');
+
+    const blob = new Blob([icsLines], { type: 'text/calendar;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Cal.ics';
+    a.click();
+    URL.revokeObjectURL(url);
+
+    const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(
+      titleText
+    )}&dates=${cleanDate}/${cleanDate}&details=${encodeURIComponent(detailsText)}&location=${encodeURIComponent(
+      locationText
+    )}`;
+    window.open(gCalUrl, '_blank', 'noopener,noreferrer');
+    showToast('success', `تم تجهيز حدث التقويم للملاحظة ${snag.snagNumber}`);
   };
 
   const handleImportExcelFile = async (file: File) => {
@@ -1694,7 +1776,6 @@ export default function App() {
       <header className="bg-gradient-to-l from-slate-950 via-slate-900 to-teal-950 text-white shadow-lg sticky top-0 z-30 border-b border-white/10">
         <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2.5">
           <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-            {/* زر القائمة الجانبية */}
             <button
               onClick={() => setIsSidebarOpen(true)}
               className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-teal-500/20 hover:bg-teal-500/30 text-teal-200 border border-teal-400/40 text-xs font-extrabold whitespace-nowrap transition shrink-0"
@@ -1705,7 +1786,6 @@ export default function App() {
 
             <span className="text-white/25 mx-0.5">|</span>
 
-            {/* زر الرئيسية */}
             <button
               onClick={() => handleSelectVilla('home')}
               className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap transition shrink-0 ${
@@ -1786,7 +1866,6 @@ export default function App() {
               </>
             )}
 
-            {/* زر الملاحظات المتأخرة الأحمر في الهيدر العلوي دائماً */}
             <button
               onClick={handleOpenDelayedModalFromHeader}
               className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap transition shrink-0 mr-auto ${
@@ -1835,7 +1914,6 @@ export default function App() {
             </div>
 
             <div className="p-4 space-y-5 flex-1">
-              {/* قسم الدخول والخروج بحساب Gmail */}
               <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-bold text-slate-300">حالة الدخول والصلاحية</span>
@@ -2043,6 +2121,34 @@ export default function App() {
 
                     {permissions.canCreate && (
                       <>
+                        <form
+                          onSubmit={handleQuickAddSnag}
+                          className="mt-2 p-3 rounded-2xl bg-white/10 border border-amber-400/35 space-y-2"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-black text-amber-300">إضافة ملاحظة سريعة</span>
+                            <span className="text-[10px] text-slate-300">فيلا {currentVilla.villaNumber}</span>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-white mb-1">
+                              عنوان الملاحظة <span className="text-rose-400">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              value={quickSnagTitle}
+                              onChange={(e) => setQuickSnagTitle(e.target.value)}
+                              placeholder="اكتب عنوان الملاحظة هنا..."
+                              className="w-full px-3 py-2 rounded-xl bg-slate-950/75 border border-white/20 text-white placeholder-slate-400 text-xs focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+                          <button
+                            type="submit"
+                            className="w-full py-2 px-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black shadow transition"
+                          >
+                            حفظ
+                          </button>
+                        </form>
+
                         <button
                           onClick={() => {
                             setEditingSnag(null);
@@ -2258,6 +2364,14 @@ export default function App() {
               </button>
 
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleAddToCalendar(selectedSnag)}
+                  className="px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-xs font-extrabold flex items-center gap-1.5"
+                >
+                  <CalendarPlus className="w-4 h-4" />
+                  <span>Cal.cis</span>
+                </button>
                 {permissions.canApprove && selectedSnag.status !== 'معتمد ومغلق من المالك' && (
                   <button
                     onClick={() => setReviewModalSnag(selectedSnag)}
@@ -2347,7 +2461,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* المخطط الزمني التفاعلي من 4 مراحل */}
               <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
                   <h3 className="font-black text-slate-900 text-sm sm:text-base flex items-center gap-2">
@@ -2411,7 +2524,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* صور المشكلة وحل المشكلة جنباً إلى جنب مع إمكانية رفع صورة الحل وتكبير الصور */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                 <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50/50 space-y-2.5">
                   <div className="flex items-center justify-between">
@@ -2526,7 +2638,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* التعليقات */}
               <div className="pt-4 border-t border-slate-100 space-y-3">
                 <h4 className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
                   <MessageSquare className="w-4 h-4 text-teal-600" />
@@ -2724,105 +2835,266 @@ export default function App() {
             </div>
 
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
                 <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">
                   سجل ملاحظات فيلا {currentVilla.villaNumber} - بلوك {currentVilla.blockNumber}
                 </h3>
-                <button
-                  onClick={() => setActiveTab('snags')}
-                  className="text-xs font-extrabold text-teal-700 hover:underline flex items-center gap-1"
-                >
-                  <span>عرض الكل والبحث المتقدم</span>
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
+
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setSnagsViewMode('grid')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${
+                        snagsViewMode === 'grid'
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                      <span>شبكي</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSnagsViewMode('list')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${
+                        snagsViewMode === 'list'
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <List className="w-3.5 h-3.5" />
+                      <span>قائمة</span>
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => setActiveTab('snags')}
+                    className="text-xs font-extrabold text-teal-700 hover:underline flex items-center gap-1"
+                  >
+                    <span>عرض الكل والبحث المتقدم</span>
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-right text-xs">
-                  <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
-                    <tr>
-                      <th className="py-3 px-4">الرقم</th>
-                      <th className="py-3 px-4">الملاحظة</th>
-                      <th className="py-3 px-4">الموقع</th>
-                      <th className="py-3 px-4">الموعد المستهدف</th>
-                      <th className="py-3 px-4">الحالة</th>
-                      <th className="py-3 px-4">التفاصيل</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {villaSnags.map((s) => {
-                      const st = STATUS_CONFIG[s.status] || STATUS_CONFIG['تم الرصد والتوثيق'];
-                      const late = getDelayDays(s);
-                      return (
-                        <tr key={s.id} className="hover:bg-slate-50">
-                          <td className="py-3 px-4 font-black text-slate-900 whitespace-nowrap">{s.snagNumber}</td>
-                          <td className="py-3 px-4">
-                            <div className="font-bold text-slate-900">{s.title}</div>
-                            {late > 0 && (
-                              <span className="text-[11px] font-extrabold text-rose-600">
-                                متأخرة {late} يوم عن الموعد
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-slate-600 whitespace-nowrap">
-                            {s.floor} • {s.location}
-                          </td>
-                          <td className="py-3 px-4 whitespace-nowrap font-bold">{s.dueDate}</td>
-                          <td className="py-3 px-4 whitespace-nowrap">
+
+              {snagsViewMode === 'grid' ? (
+                <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3.5 bg-slate-50/50">
+                  {villaSnags.map((s) => {
+                    const st = STATUS_CONFIG[s.status] || STATUS_CONFIG['تم الرصد والتوثيق'];
+                    const late = getDelayDays(s);
+                    const hasProbImg = Boolean(s.problemImage || s.beforeImage);
+                    const hasSolImg = Boolean(s.solutionImage || s.afterImage);
+                    return (
+                      <div
+                        key={s.id}
+                        className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col justify-between gap-3"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <span className="px-2.5 py-0.5 rounded-lg bg-slate-900 text-white text-xs font-black">
+                              {s.snagNumber}
+                            </span>
+                            <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${PRIORITY_CONFIG[s.priority]?.badge}`}>
+                              {PRIORITY_CONFIG[s.priority]?.label}
+                            </span>
+                          </div>
+                          <h4 className="font-extrabold text-slate-900 text-sm">{s.title}</h4>
+                          <p className="text-xs text-slate-500 mt-1">
+                            {s.category} • {s.floor} - {s.location}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-2 mt-2.5">
                             <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold border ${st.bg} ${st.color} ${st.border}`}>
                               {st.label}
                             </span>
-                          </td>
-                          <td className="py-3 px-4 whitespace-nowrap">
+                            {late > 0 && (
+                              <span className="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-rose-100 text-rose-800">
+                                متأخرة {late} يوم
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 pt-2.5 border-t border-slate-100">
+                          <div className="flex items-center gap-1.5">
+                            {hasProbImg && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setLightboxImage({
+                                    src: s.problemImage || s.beforeImage,
+                                    title: `صورة المشكلة — ${s.snagNumber}`
+                                  })
+                                }
+                                className="px-2 py-1 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 text-[11px] font-bold"
+                              >
+                                المشكلة
+                              </button>
+                            )}
+                            {hasSolImg && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setLightboxImage({
+                                    src: (s.solutionImage || s.afterImage)!,
+                                    title: `صورة حل المشكلة — ${s.snagNumber}`
+                                  })
+                                }
+                                className="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold"
+                              >
+                                الحل
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleAddToCalendar(s)}
+                              className="px-2.5 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-xs font-extrabold flex items-center gap-1 transition"
+                              title="Cal.cis"
+                            >
+                              <CalendarPlus className="w-3.5 h-3.5" />
+                              <span>Cal.cis</span>
+                            </button>
+
                             <button
                               onClick={() => setSelectedSnagId(s.id)}
-                              className="px-3 py-1.5 rounded-lg bg-slate-900 text-white font-bold hover:bg-teal-700"
+                              className="px-3.5 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold flex items-center gap-1"
                             >
-                              فتح
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>فتح</span>
                             </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                      <tr>
+                        <th className="py-3 px-4">الرقم</th>
+                        <th className="py-3 px-4">الملاحظة</th>
+                        <th className="py-3 px-4">الموقع</th>
+                        <th className="py-3 px-4">الموعد المستهدف</th>
+                        <th className="py-3 px-4">الحالة</th>
+                        <th className="py-3 px-4">إجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {villaSnags.map((s) => {
+                        const st = STATUS_CONFIG[s.status] || STATUS_CONFIG['تم الرصد والتوثيق'];
+                        const late = getDelayDays(s);
+                        return (
+                          <tr key={s.id} className="hover:bg-slate-50">
+                            <td className="py-3 px-4 font-black text-slate-900 whitespace-nowrap">{s.snagNumber}</td>
+                            <td className="py-3 px-4">
+                              <div className="font-bold text-slate-900">{s.title}</div>
+                              {late > 0 && (
+                                <span className="text-[11px] font-extrabold text-rose-600">
+                                  متأخرة {late} يوم عن الموعد
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-slate-600 whitespace-nowrap">
+                              {s.floor} • {s.location}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap font-bold">{s.dueDate}</td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold border ${st.bg} ${st.color} ${st.border}`}>
+                                {st.label}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleAddToCalendar(s)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 font-bold flex items-center gap-1"
+                                  title="Cal.cis"
+                                >
+                                  <CalendarPlus className="w-3.5 h-3.5" />
+                                  <span>Cal.cis</span>
+                                </button>
+                                <button
+                                  onClick={() => setSelectedSnagId(s.id)}
+                                  className="px-3 py-1.5 rounded-lg bg-slate-900 text-white font-bold hover:bg-teal-700"
+                                >
+                                  فتح
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         ) : activeTab === 'snags' ? (
           /* =================================================================
-             العرض 4: سجل الملاحظات والبحث والفلترة
+             العرض 4: سجل ملاحظات الفيلا والبحث والتصفية (شبكي / قائمة List)
              ================================================================= */
-          <div className="space-y-5">
-            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-              <div className="flex flex-col md:flex-row gap-3">
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
+          <div className="space-y-4">
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-extrabold text-teal-800">
+                    سجل ملاحظات: فيلا {currentVilla.villaNumber} - بلوك {currentVilla.blockNumber} ({currentVilla.ownerName})
+                  </span>
+                  <span className="text-xs font-bold text-slate-500">
+                    ({filteredVillaSnags.length} من {villaSnags.length})
+                  </span>
+                </div>
+
+                <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setSnagsViewMode('grid')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${
+                      snagsViewMode === 'grid'
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    <span>شبكي</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSnagsViewMode('list')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${
+                      snagsViewMode === 'list'
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <List className="w-3.5 h-3.5" />
+                    <span>قائمة (List)</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+                <div className="relative lg:col-span-2">
+                  <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder={`بحث برقم الملاحظة (${currentVilla.prefix}-001) أو العنوان أو الموقع...`}
-                    className="w-full pr-10 pl-4 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm"
+                    placeholder="ابحث برقم الملاحظة أو الوصف أو الغرفة..."
+                    className="w-full pr-9 pl-3 py-2 rounded-xl border border-slate-200 text-xs focus:outline-none focus:border-teal-500"
                   />
                 </div>
-                <button
-                  onClick={() => setFilterDelayedOnly(!filterDelayedOnly)}
-                  className={`px-4 py-2.5 rounded-xl text-xs font-extrabold border flex items-center justify-center gap-1.5 transition ${
-                    filterDelayedOnly
-                      ? 'bg-rose-600 text-white border-rose-600'
-                      : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
-                  }`}
-                >
-                  <AlertTriangle className="w-4 h-4" />
-                  <span>المتأخرة فقط ({villaStats.delayed.length})</span>
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100">
                 <select
                   value={filterFloor}
                   onChange={(e) => setFilterFloor(e.target.value)}
-                  className="px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+                  className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold bg-white"
                 >
                   <option value="الكل">جميع الأدوار</option>
                   {FLOORS.map((f) => (
@@ -2831,24 +3103,22 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-
                 <select
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
-                  className="px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+                  className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold bg-white"
                 >
-                  <option value="الكل">جميع مراحل الحالة</option>
+                  <option value="الكل">جميع المراحل</option>
                   {Object.keys(STATUS_CONFIG).map((st) => (
                     <option key={st} value={st}>
-                      {STATUS_CONFIG[st].label}
+                      {st}
                     </option>
                   ))}
                 </select>
-
                 <select
                   value={filterCategory}
                   onChange={(e) => setFilterCategory(e.target.value)}
-                  className="px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+                  className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold bg-white"
                 >
                   <option value="الكل">جميع التخصصات</option>
                   {CATEGORIES.map((c) => (
@@ -2860,107 +3130,265 @@ export default function App() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filteredVillaSnags.map((snag) => {
-                const st = STATUS_CONFIG[snag.status] || STATUS_CONFIG['تم الرصد والتوثيق'];
-                const late = getDelayDays(snag);
-                const hasProbImg = Boolean(snag.problemImage || snag.beforeImage);
-                const hasSolImg = Boolean(snag.solutionImage || snag.afterImage);
-                return (
-                  <div
-                    key={snag.id}
-                    className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col justify-between gap-3"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between gap-2 mb-2">
-                        <span className="px-2.5 py-0.5 rounded-lg bg-slate-900 text-white text-xs font-black">
-                          {snag.snagNumber}
-                        </span>
-                        <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${PRIORITY_CONFIG[snag.priority]?.badge}`}>
-                          {PRIORITY_CONFIG[snag.priority]?.label}
-                        </span>
-                      </div>
-                      <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">{snag.title}</h3>
-                      <p className="text-xs text-slate-500 mt-1">
-                        {snag.category} • {snag.floor} - {snag.location}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-2 mt-3">
-                        <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold border ${st.bg} ${st.color} ${st.border}`}>
-                          {st.label}
-                        </span>
-                        {late > 0 && (
-                          <span className="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-rose-100 text-rose-800">
-                            متأخرة {late} يوم
+            {filteredVillaSnags.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center text-sm text-slate-500 font-bold">
+                لا توجد ملاحظات مطابقة لخيارات البحث والتصفية الحالية.
+              </div>
+            ) : snagsViewMode === 'grid' ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredVillaSnags.map((snag) => {
+                  const st = STATUS_CONFIG[snag.status] || STATUS_CONFIG['تم الرصد والتوثيق'];
+                  const late = getDelayDays(snag);
+                  const hasProbImg = Boolean(snag.problemImage || snag.beforeImage);
+                  const hasSolImg = Boolean(snag.solutionImage || snag.afterImage);
+                  return (
+                    <div
+                      key={snag.id}
+                      className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-3">
+                          <span className="px-2.5 py-1 rounded-lg bg-slate-900 text-white text-xs font-black">
+                            {snag.snagNumber}
                           </span>
+                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${PRIORITY_CONFIG[snag.priority]?.badge}`}>
+                            {PRIORITY_CONFIG[snag.priority]?.label}
+                          </span>
+                        </div>
+                        <h3 className="font-extrabold text-slate-900 text-sm sm:text-base mb-1.5">
+                          {snag.title}
+                        </h3>
+                        <p className="text-xs text-slate-600 line-clamp-2 mb-3">{snag.description}</p>
+                        <div className="text-[11px] text-slate-500 space-y-1 mb-3">
+                          <div>
+                            <strong>الموقع:</strong> {snag.floor} • {snag.location}
+                          </div>
+                          <div>
+                            <strong>التخصص:</strong> {snag.category} | <strong>الموعد:</strong> {snag.dueDate}
+                          </div>
+                        </div>
+
+                        {(hasProbImg || hasSolImg) && (
+                          <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                            {hasProbImg && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setLightboxImage({
+                                    src: snag.problemImage || snag.beforeImage,
+                                    title: `صورة المشكلة — ${snag.snagNumber}: ${snag.title}`
+                                  })
+                                }
+                                className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-bold flex items-center gap-1"
+                              >
+                                <Camera className="w-3 h-3" />
+                                <span>صورة المشكلة</span>
+                              </button>
+                            )}
+                            {hasSolImg && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setLightboxImage({
+                                    src: (snag.solutionImage || snag.afterImage)!,
+                                    title: `صورة حل المشكلة — ${snag.snagNumber}: ${snag.title}`
+                                  })
+                                }
+                                className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[11px] font-bold flex items-center gap-1"
+                              >
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>صورة الحل</span>
+                              </button>
+                            )}
+                          </div>
                         )}
+
+                        <div className="flex flex-wrap gap-1.5 mb-4">
+                          <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold border ${st.bg} ${st.color} ${st.border}`}>
+                            {st.label}
+                          </span>
+                          {late > 0 && (
+                            <span className="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-rose-100 text-rose-800">
+                              متأخرة {late} يوم
+                            </span>
+                          )}
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-slate-100">
-                        {hasProbImg && (
+                      <div className="flex items-center gap-2 pt-3 border-t border-slate-100 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => handleAddToCalendar(snag)}
+                          className="py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-xs font-extrabold flex items-center justify-center gap-1.5"
+                        >
+                          <CalendarPlus className="w-4 h-4" />
+                          <span>Cal.cis</span>
+                        </button>
+                        <button
+                          onClick={() => setSelectedSnagId(snag.id)}
+                          className="flex-1 py-2 px-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+                        >
+                          <Eye className="w-4 h-4" />
+                          <span>التفاصيل والمراحل</span>
+                        </button>
+                        {permissions.canEdit && (
                           <button
-                            type="button"
-                            onClick={() =>
-                              setLightboxImage({
-                                src: snag.problemImage || snag.beforeImage,
-                                title: `صورة المشكلة — ${snag.snagNumber}`
-                              })
-                            }
-                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-[11px] font-bold"
+                            onClick={() => {
+                              setEditingSnag(snag);
+                              setIsFormModalOpen(true);
+                            }}
+                            className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700"
                           >
-                            <Camera className="w-3.5 h-3.5" />
-                            <span>صورة المشكلة</span>
+                            <Edit3 className="w-4 h-4" />
                           </button>
                         )}
-                        {hasSolImg && (
+                        {permissions.canDelete && (
                           <button
-                            type="button"
-                            onClick={() =>
-                              setLightboxImage({
-                                src: (snag.solutionImage || snag.afterImage)!,
-                                title: `صورة حل المشكلة — ${snag.snagNumber}`
-                              })
-                            }
-                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[11px] font-bold"
+                            onClick={() => setDeleteConfirmSnag(snag)}
+                            className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600"
                           >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>صورة الحل</span>
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         )}
                       </div>
                     </div>
-
-                    <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
-                      <button
-                        onClick={() => setSelectedSnagId(snag.id)}
-                        className="flex-1 py-2 px-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold flex items-center justify-center gap-1.5"
-                      >
-                        <Eye className="w-4 h-4" />
-                        <span>التفاصيل والمراحل</span>
-                      </button>
-                      {permissions.canEdit && (
-                        <button
-                          onClick={() => {
-                            setEditingSnag(snag);
-                            setIsFormModalOpen(true);
-                          }}
-                          className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700"
-                        >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                      )}
-                      {permissions.canDelete && (
-                        <button
-                          onClick={() => setDeleteConfirmSnag(snag)}
-                          className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-slate-900 text-white font-bold">
+                      <tr>
+                        <th className="py-3 px-4">الرقم</th>
+                        <th className="py-3 px-4">الملاحظة والتخصص</th>
+                        <th className="py-3 px-4">الدور والموقع</th>
+                        <th className="py-3 px-4">الأولوية</th>
+                        <th className="py-3 px-4">الحالة</th>
+                        <th className="py-3 px-4">الصور</th>
+                        <th className="py-3 px-4 text-center">إجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredVillaSnags.map((snag) => {
+                        const st = STATUS_CONFIG[snag.status] || STATUS_CONFIG['تم الرصد والتوثيق'];
+                        const late = getDelayDays(snag);
+                        const hasProbImg = Boolean(snag.problemImage || snag.beforeImage);
+                        const hasSolImg = Boolean(snag.solutionImage || snag.afterImage);
+                        return (
+                          <tr key={snag.id} className="hover:bg-slate-50 transition">
+                            <td className="py-3 px-4 font-black text-slate-900 whitespace-nowrap">
+                              {snag.snagNumber}
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="font-extrabold text-slate-900 text-xs sm:text-sm">{snag.title}</div>
+                              <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
+                                <span>{snag.category}</span>
+                                <span>• الموعد: {snag.dueDate}</span>
+                                {late > 0 && (
+                                  <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 font-black">
+                                    متأخرة {late} يوم
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 text-slate-600 whitespace-nowrap">
+                              {snag.floor} • {snag.location}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${PRIORITY_CONFIG[snag.priority]?.badge}`}>
+                                {PRIORITY_CONFIG[snag.priority]?.label}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold border ${st.bg} ${st.color} ${st.border}`}>
+                                {st.label}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <div className="flex items-center gap-1.5">
+                                {hasProbImg && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setLightboxImage({
+                                        src: snag.problemImage || snag.beforeImage,
+                                        title: `صورة المشكلة — ${snag.snagNumber}`
+                                      })
+                                    }
+                                    className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-bold"
+                                    title="صورة المشكلة"
+                                  >
+                                    المشكلة
+                                  </button>
+                                )}
+                                {hasSolImg && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setLightboxImage({
+                                        src: (snag.solutionImage || snag.afterImage)!,
+                                        title: `صورة حل المشكلة — ${snag.snagNumber}`
+                                      })
+                                    }
+                                    className="px-2 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[11px] font-bold"
+                                    title="صورة الحل"
+                                  >
+                                    الحل
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleAddToCalendar(snag)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-[11px] font-bold flex items-center gap-1"
+                                  title="Cal.cis"
+                                >
+                                  <CalendarPlus className="w-3.5 h-3.5" />
+                                  <span>Cal.cis</span>
+                                </button>
+                                <button
+                                  onClick={() => setSelectedSnagId(snag.id)}
+                                  className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-[11px] font-bold flex items-center gap-1"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>فتح</span>
+                                </button>
+                                {permissions.canEdit && (
+                                  <button
+                                    onClick={() => {
+                                      setEditingSnag(snag);
+                                      setIsFormModalOpen(true);
+                                    }}
+                                    className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700"
+                                    title="تعديل"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                                {permissions.canDelete && (
+                                  <button
+                                    onClick={() => setDeleteConfirmSnag(snag)}
+                                    className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600"
+                                    title="حذف"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         ) : activeTab === 'reports' ? (
           /* =================================================================
@@ -3454,58 +3882,6 @@ export default function App() {
               <LogIn className="w-4 h-4 text-amber-400" />
               <span>المتابعة باستخدام حساب Google (Gmail)</span>
             </button>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleAttemptLogin(loginEmailInput);
-              }}
-              className="space-y-3 pt-2 border-t border-slate-100"
-            >
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">أو التحقق المباشر بالبريد الإلكتروني (Gmail)</label>
-                <input
-                  type="email"
-                  dir="ltr"
-                  value={loginEmailInput}
-                  onChange={(e) => setLoginEmailInput(e.target.value)}
-                  placeholder="aalbinalshaikh@gmail.com"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-mono text-left"
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-2.5 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-black shadow"
-              >
-                دخول وتحقق من الصلاحية
-              </button>
-            </form>
-
-            <div className="pt-3 border-t border-slate-100 space-y-2">
-              <span className="text-[11px] font-bold text-slate-400 block">
-                معاينة سريعة (تطابق مصرح به / غير مصرح):
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {authorizedMembers.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => handleAttemptLogin(m.email)}
-                    className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-teal-50 hover:text-teal-800 text-[11px] font-bold text-slate-700 transition"
-                  >
-                    {m.name.split(' ')[0]} ({m.email.split('@')[0]})
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => handleAttemptLogin('visitor.guest@gmail.com')}
-                  className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-[11px] font-bold text-rose-700 border border-rose-200 transition"
-                >
-                  تجربة بريد غير مصرح
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}
@@ -3758,39 +4134,43 @@ function SnagFormDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 my-8 space-y-4">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div>
-            <span className="text-[11px] font-extrabold text-teal-700">
+    <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-white rounded-t-3xl sm:rounded-3xl max-w-2xl w-full max-h-[92dvh] sm:max-h-[88vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-100 bg-white shrink-0">
+          <div className="min-w-0">
+            <span className="text-[11px] font-extrabold text-teal-700 block truncate">
               فيلا {villa.villaNumber} - بلوك {villa.blockNumber} ({villa.ownerName})
             </span>
-            <h3 className="text-lg font-black text-slate-900">
+            <h3 className="text-base sm:text-lg font-black text-slate-900 truncate">
               {initialData
                 ? `تعديل الملاحظة (${initialData.snagNumber})`
-                : `إضافة ملاحظة جديدة — فيلا ${villa.villaNumber} بلوك ${villa.blockNumber}`}
+                : `إضافة ملاحظة جديدة — فيلا ${villa.villaNumber}`}
             </h3>
           </div>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-slate-100 text-slate-500">
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 shrink-0"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {err && (
-          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold">
-            {err}
-          </div>
-        )}
+        <form id="snag-form-dialog" onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-3.5">
+          {err && (
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold">
+              {err}
+            </div>
+          )}
 
-        <form onSubmit={handleSubmit} className="space-y-3.5">
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">عنوان الملاحظة *</label>
+            <label className="block text-xs font-extrabold text-slate-800 mb-1.5">عنوان الملاحظة *</label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="مثال: ضبط وزنية باب مجلس الرجال..."
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm"
+              className="w-full px-3.5 py-2.5 rounded-xl border-2 border-teal-500/40 focus:border-teal-600 focus:outline-none text-sm bg-slate-50/40"
             />
           </div>
 
@@ -3800,7 +4180,7 @@ function SnagFormDialog({
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs font-bold bg-white"
               >
                 {CATEGORIES.map((c) => (
                   <option key={c} value={c}>
@@ -3818,7 +4198,7 @@ function SnagFormDialog({
                   setFloor(fl);
                   setLocation(LOCATIONS_BY_FLOOR[fl]?.[0] || '');
                 }}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs font-bold bg-white"
               >
                 {FLOORS.map((f) => (
                   <option key={f} value={f}>
@@ -3832,7 +4212,7 @@ function SnagFormDialog({
               <select
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs font-bold bg-white"
               >
                 {(LOCATIONS_BY_FLOOR[floor] || []).map((loc) => (
                   <option key={loc} value={loc}>
@@ -3849,7 +4229,7 @@ function SnagFormDialog({
               <select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value as any)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs font-bold bg-white"
               >
                 {Object.keys(PRIORITY_CONFIG).map((p) => (
                   <option key={p} value={p}>
@@ -3864,7 +4244,7 @@ function SnagFormDialog({
                 type="date"
                 value={createdAt}
                 onChange={(e) => setCreatedAt(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs"
               />
             </div>
             <div>
@@ -3873,7 +4253,7 @@ function SnagFormDialog({
                 type="date"
                 value={dueDate}
                 onChange={(e) => setDueDate(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs"
               />
             </div>
           </div>
@@ -3885,7 +4265,7 @@ function SnagFormDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="اكتب وصفاً دقيقاً للملاحظة..."
-              className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs"
             />
           </div>
 
@@ -3969,7 +4349,7 @@ function SnagFormDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-2">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">ملاحظات المقاول</label>
               <input
@@ -3977,7 +4357,7 @@ function SnagFormDialog({
                 value={contractorNotes}
                 onChange={(e) => setContractorNotes(e.target.value)}
                 placeholder="ملاحظات التنفيذ..."
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs"
               />
             </div>
             <div>
@@ -3987,28 +4367,29 @@ function SnagFormDialog({
                 value={supervisorNotes}
                 onChange={(e) => setSupervisorNotes(e.target.value)}
                 placeholder="توجيهات الإشراف..."
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs"
               />
             </div>
           </div>
-
-          <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold"
-            >
-              إلغاء
-            </button>
-            <button
-              type="submit"
-              disabled={compressing}
-              className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-black shadow"
-            >
-              {initialData ? 'حفظ التعديلات' : 'حفظ وتسجيل الملاحظة'}
-            </button>
-          </div>
         </form>
+
+        <div className="flex items-center justify-end gap-2.5 px-4 sm:px-6 py-3.5 border-t border-slate-100 bg-slate-50 shrink-0">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2.5 rounded-xl bg-white border border-slate-300 text-slate-700 text-xs font-bold"
+          >
+            إلغاء
+          </button>
+          <button
+            type="submit"
+            form="snag-form-dialog"
+            disabled={compressing}
+            className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-black shadow"
+          >
+            {initialData ? 'حفظ التعديلات' : 'حفظ وتسجيل الملاحظة'}
+          </button>
+        </div>
       </div>
     </div>
   );
