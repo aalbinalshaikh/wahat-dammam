@@ -703,6 +703,7 @@ export default function App() {
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [editingSnag, setEditingSnag] = useState<SnagItem | null>(null);
   const [quickSnagTitle, setQuickSnagTitle] = useState('');
+  const [quickSnagDueDate, setQuickSnagDueDate] = useState('2026-11-30');
   const [deleteConfirmSnag, setDeleteConfirmSnag] = useState<SnagItem | null>(null);
   const [reviewModalSnag, setReviewModalSnag] = useState<SnagItem | null>(null);
   const [isDelayModalOpen, setIsDelayModalOpen] = useState(false);
@@ -1171,7 +1172,7 @@ export default function App() {
       status: 'تم الرصد والتوثيق',
       priority: 'متوسطة',
       createdAt: todayStr,
-      dueDate: '2026-11-30',
+      dueDate: quickSnagDueDate || '2026-11-30',
       contractorNotes: '',
       supervisorNotes: '',
       villaNumber: currentVilla.villaNumber,
@@ -2123,7 +2124,7 @@ export default function App() {
                       <>
                         <form
                           onSubmit={handleQuickAddSnag}
-                          className="mt-2 p-3 rounded-2xl bg-white/10 border border-amber-400/35 space-y-2"
+                          className="mt-2 p-3 rounded-2xl bg-white/10 border border-amber-400/35 space-y-2.5"
                         >
                           <div className="flex items-center justify-between">
                             <span className="text-xs font-black text-amber-300">إضافة ملاحظة سريعة</span>
@@ -2139,6 +2140,17 @@ export default function App() {
                               onChange={(e) => setQuickSnagTitle(e.target.value)}
                               placeholder="اكتب عنوان الملاحظة هنا..."
                               className="w-full px-3 py-2 rounded-xl bg-slate-950/75 border border-white/20 text-white placeholder-slate-400 text-xs focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-white mb-1">
+                              الموعد المستهدف
+                            </label>
+                            <input
+                              type="date"
+                              value={quickSnagDueDate}
+                              onChange={(e) => setQuickSnagDueDate(e.target.value)}
+                              className="w-full px-3 py-2 rounded-xl bg-slate-950/75 border border-white/20 text-white text-xs focus:outline-none focus:border-amber-400"
                             />
                           </div>
                           <button
