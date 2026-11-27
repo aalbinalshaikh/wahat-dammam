@@ -7,7 +7,7 @@ import {
   BarChart3, Activity, Send, AlertCircle,
   Home, ListChecks, Users, History, LogIn, LogOut, Lock, Mail,
   Menu, Check, Cloud, HardDrive, UploadCloud, Maximize2, Image as ImageIcon,
-  Download, FileUp, LayoutGrid, List, CalendarPlus
+  Download, FileUp, LayoutGrid, List, CalendarPlus, Share2
 } from 'lucide-react';
 
 // ============================================================================
@@ -180,7 +180,7 @@ interface AuditLog {
 }
 
 // ============================================================================
-// 2. دوال مساعدة نظيفة (تنظيف البيانات، ضغط الصور، تحليل CSV)
+// 2. ضغط الصور وتوليد صور توثيقية نظيفة وخالية من قيم undefined لـ Firestore
 // ============================================================================
 
 const sanitizeForFirestore = (obj: any): any => {
@@ -1198,6 +1198,23 @@ export default function App() {
     showToast('success', `تم حفظ الملاحظة السريعة (${nextNum}) في فيلا ${currentVilla.villaNumber}`);
   };
 
+  const handleDeleteSnag = async () => {
+    if (!deleteConfirmSnag) return;
+    const target = deleteConfirmSnag;
+    setAllSnags((prev) => prev.filter((item) => item.id !== target.id));
+    setDeleteConfirmSnag(null);
+    if (selectedSnagId === target.id) {
+      setSelectedSnagId(null);
+    }
+
+    const fb = firebaseRefs.current;
+    if (fb && fb.db && fb.fsMod) {
+      fb.fsMod.deleteDoc(fb.fsMod.doc(fb.db, 'notes', target.id)).catch(() => {});
+    }
+    await addLogEntry(target.villaId, 'حذف ملاحظة', target.snagNumber, `تم حذف الملاحظة: ${target.title}`);
+    showToast('success', `تم حذف الملاحظة ${target.snagNumber} بنجاح`);
+  };
+
   const handleAdvanceStep = async (snag: SnagItem, targetStep: number, noteText?: string, rating?: number) => {
     const nowFormatted = new Date().toLocaleString('ar-SA', {
       year: 'numeric',
@@ -1593,6 +1610,130 @@ export default function App() {
     )}`;
     window.open(gCalUrl, '_blank', 'noopener,noreferrer');
     showToast('success', `تم تجهيز حدث التقويم للملاحظة ${snag.snagNumber}`);
+  };
+
+  const handleShareSnag = async (snag: SnagItem) => {
+    const shareTitle = `${snag.title} (${snag.snagNumber})`;
+    const shareText = `فيلا ${snag.villaNumber} - بلوك ${snag.blockNumber}\n${snag.title}\n${snag.category} • ${snag.floor} - ${snag.location}`;
+    const imgSrc = snag.solutionImage || snag.afterImage || snag.problemImage || snag.beforeImage;
+
+    // توليد صورة بطاقة موحدة (صورة الملاحظة + العنوان والتخصص والموقع أسفلها بنفس الشكل المطلوب)
+    const createShareCardBlob = (): Promise<Blob | null> => {
+      return new Promise((resolve) => {
+        const buildCard = (loadedImg: HTMLImageElement | null) => {
+          const width = 900;
+          const imgHeight = 520;
+          const footerHeight = 165;
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = imgHeight + footerHeight;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(null);
+            return;
+          }
+
+          // خلفية البطاقة الكاملة
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, width, canvas.height);
+
+          // رسم الصورة في الجزء العلوي
+          if (loadedImg) {
+            const scale = Math.max(width / loadedImg.width, imgHeight / loadedImg.height);
+            const drawW = loadedImg.width * scale;
+            const drawH = loadedImg.height * scale;
+            const offsetX = (width - drawW) / 2;
+            const offsetY = (imgHeight - drawH) / 2;
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(0, 0, width, imgHeight);
+            ctx.clip();
+            ctx.drawImage(loadedImg, offsetX, offsetY, drawW, drawH);
+            ctx.restore();
+          } else {
+            ctx.fillStyle = '#1e293b';
+            ctx.fillRect(0, 0, width, imgHeight);
+          }
+
+          // خط فاصل خفيف بين الصورة والنص السفلي
+          ctx.fillStyle = '#e2e8f0';
+          ctx.fillRect(0, imgHeight, width, 2);
+
+          // كتابة العنوان والتفاصيل باليمين بنفس تنسيق واتساب وتيليجرام
+          ctx.direction = 'rtl';
+          ctx.textAlign = 'right';
+
+          ctx.fillStyle = '#0f172a';
+          ctx.font = 'bold 34px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          const titleDisplay =
+            snag.title.length > 44 ? `${snag.title.slice(0, 44)}...` : snag.title;
+          ctx.fillText(titleDisplay, width - 36, imgHeight + 66);
+
+          ctx.fillStyle = '#64748b';
+          ctx.font = '600 26px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          const metaLine = `${snag.category}  •  ${snag.floor} - ${snag.location}`;
+          ctx.fillText(metaLine, width - 36, imgHeight + 122);
+
+          // رقم الملاحظة والفيلا في الزاوية اليسرى السفلية
+          ctx.textAlign = 'left';
+          ctx.fillStyle = '#0f766e';
+          ctx.font = 'bold 22px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          ctx.fillText(`${snag.snagNumber} | فيلا ${snag.villaNumber}`, 36, imgHeight + 122);
+
+          canvas.toBlob((blob) => resolve(blob), 'image/png');
+        };
+
+        if (!imgSrc) {
+          buildCard(null);
+          return;
+        }
+
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => buildCard(img);
+        img.onerror = () => buildCard(null);
+        img.src = imgSrc;
+      });
+    };
+
+    try {
+      const cardBlob = await createShareCardBlob();
+      const filesToShare = cardBlob
+        ? [new File([cardBlob], `${snag.snagNumber}.png`, { type: 'image/png' })]
+        : [];
+
+      if (navigator.share) {
+        if (filesToShare.length > 0 && navigator.canShare && navigator.canShare({ files: filesToShare })) {
+          await navigator.share({
+            title: shareTitle,
+            text: shareText,
+            files: filesToShare
+          });
+          return;
+        }
+
+        await navigator.share({
+          title: shareTitle,
+          text: shareText
+        });
+        return;
+      }
+
+      if (cardBlob) {
+        const url = URL.createObjectURL(cardBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${snag.snagNumber}.png`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return;
+    }
+
+    const waUrl = `https://wa.me/?text=${encodeURIComponent(shareText)}`;
+    window.open(waUrl, '_blank', 'noopener,noreferrer');
+    showToast('success', 'تم تجهيز بطاقة الملاحظة للمشاركة');
   };
 
   const handleImportExcelFile = async (file: File) => {
@@ -2190,7 +2331,6 @@ export default function App() {
               )}
             </div>
 
-            {/* حالة الاتصال السحابي أسفل القائمة الجانبية */}
             <div className="p-4 border-t border-white/10 space-y-2.5">
               <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-[11px]">
                 <span className="text-slate-300 font-bold">المزامنة:</span>
@@ -2240,7 +2380,6 @@ export default function App() {
           </div>
         )}
 
-        {/* العرض 1: الصفحة الرئيسية (بوابة الفلل الأربع) */}
         {!currentVilla ? (
           <div className="space-y-8">
             <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -2362,9 +2501,6 @@ export default function App() {
             </div>
           </div>
         ) : selectedSnag ? (
-          /* =================================================================
-             العرض 2: تفاصيل الملاحظة + المخطط الزمني الرباعي + صور المشكلة والحل
-             ================================================================= */
           <div className="space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
               <button
@@ -2376,6 +2512,14 @@ export default function App() {
               </button>
 
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleShareSnag(selectedSnag)}
+                  className="px-3.5 py-2 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 text-xs font-extrabold flex items-center gap-1.5"
+                >
+                  <Share2 className="w-4 h-4" />
+                  <span>مشاركة</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => handleAddToCalendar(selectedSnag)}
@@ -2698,9 +2842,6 @@ export default function App() {
             </div>
           </div>
         ) : activeTab === 'dashboard' ? (
-          /* =================================================================
-             العرض 3: لوحة التحكم والإحصائيات للفيلا المختارة
-             ================================================================= */
           <div className="space-y-6">
             <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
@@ -2962,6 +3103,16 @@ export default function App() {
                           <div className="flex items-center gap-1.5 flex-wrap justify-end">
                             <button
                               type="button"
+                              onClick={() => handleShareSnag(s)}
+                              className="px-2.5 py-1.5 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 text-xs font-extrabold flex items-center gap-1 transition"
+                              title="مشاركة في واتساب أو تيليجرام"
+                            >
+                              <Share2 className="w-3.5 h-3.5" />
+                              <span>مشاركة</span>
+                            </button>
+
+                            <button
+                              type="button"
                               onClick={() => handleAddToCalendar(s)}
                               className="px-2.5 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-xs font-extrabold flex items-center gap-1 transition"
                               title="Cal.cis"
@@ -3024,6 +3175,15 @@ export default function App() {
                               <div className="flex items-center gap-1.5">
                                 <button
                                   type="button"
+                                  onClick={() => handleShareSnag(s)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 font-bold flex items-center gap-1"
+                                  title="مشاركة في واتساب أو تيليجرام"
+                                >
+                                  <Share2 className="w-3.5 h-3.5" />
+                                  <span>مشاركة</span>
+                                </button>
+                                <button
+                                  type="button"
                                   onClick={() => handleAddToCalendar(s)}
                                   className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 font-bold flex items-center gap-1"
                                   title="Cal.cis"
@@ -3049,9 +3209,6 @@ export default function App() {
             </div>
           </div>
         ) : activeTab === 'snags' ? (
-          /* =================================================================
-             العرض 4: سجل ملاحظات الفيلا والبحث والتصفية (شبكي / قائمة List)
-             ================================================================= */
           <div className="space-y-4">
             <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
@@ -3230,6 +3387,15 @@ export default function App() {
                       <div className="flex items-center gap-2 pt-3 border-t border-slate-100 flex-wrap">
                         <button
                           type="button"
+                          onClick={() => handleShareSnag(snag)}
+                          className="py-2 px-3 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 text-xs font-extrabold flex items-center justify-center gap-1.5"
+                          title="مشاركة في واتساب أو تيليجرام"
+                        >
+                          <Share2 className="w-4 h-4" />
+                          <span>مشاركة</span>
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => handleAddToCalendar(snag)}
                           className="py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-xs font-extrabold flex items-center justify-center gap-1.5"
                         >
@@ -3356,6 +3522,15 @@ export default function App() {
                               <div className="flex items-center justify-center gap-1.5">
                                 <button
                                   type="button"
+                                  onClick={() => handleShareSnag(snag)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 text-[11px] font-bold flex items-center gap-1"
+                                  title="مشاركة في واتساب أو تيليجرام"
+                                >
+                                  <Share2 className="w-3.5 h-3.5" />
+                                  <span>مشاركة</span>
+                                </button>
+                                <button
+                                  type="button"
                                   onClick={() => handleAddToCalendar(snag)}
                                   className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-[11px] font-bold flex items-center gap-1"
                                   title="Cal.cis"
@@ -3403,9 +3578,6 @@ export default function App() {
             )}
           </div>
         ) : activeTab === 'reports' ? (
-          /* =================================================================
-             العرض 5: التقارير والتصدير والاستيراد من Excel
-             ================================================================= */
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-100">
               <div>
@@ -3473,9 +3645,6 @@ export default function App() {
             </div>
           </div>
         ) : (
-          /* =================================================================
-             العرض 6: إدارة قائمة حسابات Gmail المصرح لها وسجل العمليات
-             ================================================================= */
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
               <div>
